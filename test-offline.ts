@@ -282,10 +282,6 @@ run("tree render survives optimization path", () => {
         const nextLengthR = length.mul(attenuation.ref);
         const nextAngleR = angle.sub(deltaAngle.ref);
         branch(tip, nextLengthR, nextAngleR, depth - 1, `${name}r`);
-      } else {
-        tip.dispose();
-        length.dispose();
-        angle.dispose();
       }
     }
 
