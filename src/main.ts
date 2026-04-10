@@ -1,5 +1,5 @@
 import { G9, point, line, np } from "./g9";
-import { init } from "@jax-js/jax";
+import { defaultDevice, init } from "@jax-js/jax";
 
 function show(id) {
   const el = document.getElementById(id);
@@ -22,10 +22,13 @@ async function main() {
   try {
     const backends = await init();
     console.log("jax-js init complete, backends:", backends);
+    defaultDevice("cpu");
+    console.log("jax-js default device forced to cpu");
   } catch (e) {
     console.warn("jax-js full init failed, trying cpu-only:", e.message || e);
     try {
       await init("cpu");
+      defaultDevice("cpu");
       console.log("jax-js cpu backend ready");
     } catch (e2) {
       console.warn("jax-js cpu init also failed:", e2.message || e2);
