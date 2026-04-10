@@ -118,9 +118,9 @@ async function main() {
     show("section-lines");
     new G9(
       (params) => {
-        const opts = { "stroke-width": 8, "stroke-linecap": "round" };
+        const opts = { "stroke-width": 8 };
         return {
-          l1: line(params.line1, { stroke: "#1c1917", ...opts }),
+          l1: line(params.line1, { stroke: "black", ...opts }),
           l2: line(params.line2, {
             stroke: "#e11d48",
             affects: { line2: [1, 1, 0, 0] },
