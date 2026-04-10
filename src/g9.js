@@ -57,18 +57,15 @@ function forwardGrad(scalarFn, paramArrays) {
   for (let pi = 0; pi < paramArrays.length; pi++) {
     for (let j = 0; j < sizes[pi]; j++) {
       const tangents = paramArrays.map((p, idx) => {
-        if (idx !== pi) return np.zeros(p.shape, { dtype: np.float64 });
-        const buf = new Float64Array(sizes[pi]);
-        buf[j] = 1.0;
-        return np.array(buf);
+        const buf = Array(sizes[idx]).fill(0);
+        if (idx === pi) buf[j] = 1.0;
+        return np.array(buf, { dtype: np.float64 });
       });
       const primals = paramArrays.map((p) => p.ref);
 
       try {
-        const [pOut, tOut] = jvp(scalarFn, primals, tangents);
+        const [, tOut] = jvp(scalarFn, primals, tangents);
         grad[col] = toJS(tOut);
-        pOut?.dispose?.();
-        tOut?.dispose?.();
       } catch (e) {
         console.warn("jvp error for col", col, e);
         grad[col] = 0;
@@ -86,21 +83,19 @@ function forwardGrad(scalarFn, paramArrays) {
 function readVec(params) {
   const vals = [];
   for (const p of params) for (const v of toJSArr(p.value)) vals.push(v);
-  return new Float64Array(vals);
+  return vals;
 }
 
 function writeVec(params, x) {
   let off = 0;
   for (const p of params) {
     const n = p.value.shape[0];
-    const slice = Array.from(x.slice(off, off + n));
-    p.value?.dispose?.();
-    p.value = np.array(slice, { dtype: np.float64 });
+    p.value = np.array(x.slice(off, off + n), { dtype: np.float64 });
     off += n;
   }
 }
 
-function affectsMask(params, affects) {
+function buildAffectsMask(params, affects) {
   const total = params.reduce((s, p) => s + p.value.shape[0], 0);
   const mask = new Float64Array(total).fill(1);
   if (!affects) return mask;
@@ -126,19 +121,15 @@ function affectsMask(params, affects) {
 export function minimize(params, lossFn, affects, maxIter = 30) {
   const dim = params.reduce((s, p) => s + p.value.shape[0], 0);
   if (dim === 0) return;
-  const mask = affectsMask(params, affects);
+  const mask = buildAffectsMask(params, affects);
 
   function evalLoss() {
-    const arrays = params.map((p) => p.value.ref);
-    const loss = lossFn(...arrays);
-    const v = toJS(loss);
-    loss?.dispose?.();
-    return v;
+    const loss = lossFn(...params.map((p) => p.value.ref));
+    return toJS(loss);
   }
 
   function evalGrad() {
-    const arrays = params.map((p) => p.value);
-    const g = forwardGrad(lossFn, arrays);
+    const g = forwardGrad(lossFn, params.map((p) => p.value));
     for (let i = 0; i < dim; i++) g[i] *= mask[i];
     return g;
   }
@@ -156,8 +147,7 @@ export function minimize(params, lossFn, affects, maxIter = 30) {
     let improved = false;
 
     for (let ls = 0; ls < 10; ls++) {
-      const xn = new Float64Array(dim);
-      for (let i = 0; i < dim; i++) xn[i] = x0[i] - lr * g[i];
+      const xn = x0.map((v, i) => v - lr * g[i]);
       writeVec(params, xn);
       const f1 = evalLoss();
       if (f1 < f0 - 1e-4 * lr * gnorm2) {
