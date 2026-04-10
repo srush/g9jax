@@ -110,12 +110,11 @@ export function minimize(
   affects: Record<string, any> | null | undefined,
   maxIter = 30,
 ): void {
-  const dim = params.reduce((s, p) => s + p.value.shape[0], 0);
+  const sizes = params.map((p) => p.value.shape[0]);
+  const dim = sizes.reduce((a, b) => a + b, 0);
   if (dim === 0) return;
   const mask = buildAffectsMask(params, affects);
   let x = readVec(params);
-
-  const sizes = params.map((p) => p.value.shape[0]);
   const flatLoss = (flat: any) => {
     const args: any[] = [];
     let off = 0;
@@ -140,18 +139,18 @@ export function minimize(
     for (let i = 0; i < dim; i++) gnorm2 += g[i] * g[i];
     if (gnorm2 < 1e-12) break;
 
-    const gnorm = Math.sqrt(gnorm2);
-    const dir = g.map((v) => v / gnorm);
+    let gmax = 0;
+    for (let i = 0; i < dim; i++) gmax = Math.max(gmax, Math.abs(g[i]));
 
     const x0 = x.slice();
-    let lr = gnorm;
+    let lr = Math.min(1.0, 10.0 / gmax);
     let improved = false;
 
     for (let ls = 0; ls < 20; ls++) {
-      const xn = x0.map((v, i) => v - lr * dir[i]);
+      const xn = x0.map((v, i) => v - lr * g[i]);
       const xnArr = np.array(xn, { dtype: np.float64 });
       const f1 = toJS(jitLoss(xnArr));
-      if (f1 < f0 - 1e-4 * lr * gnorm) {
+      if (f1 < f0 - 1e-4 * lr * gnorm2) {
         x = xn;
         improved = true;
         break;
