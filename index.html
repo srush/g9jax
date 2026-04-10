@@ -233,17 +233,33 @@ const outerPt = (offset, angle, radius) => {
     np.cos(a.ref).mul(radius.ref),
     np.sin(a).mul(radius)]);
 };
+const innerPt = (offset, angle, radius) => {
+  const a = angle.add(offset).neg();
+  return np.concatenate([
+    np.cos(a.ref).mul(radius.ref),
+    np.sin(a).mul(radius)]);
+};
 const vmapOuter = vmap(outerPt, [0, null, null]);
+const vmapInner = vmap(innerPt, [0, null, null]);
 
 return new G9((params) => {
-  const flat = vmapOuter(
-    OFFSETS.ref, params.angle.ref, params.radius
+  const outerFlat = vmapOuter(
+    OFFSETS.ref, params.angle.ref, params.radius.ref
+  ).reshape([SIDES * 2]);
+  const halfR = params.radius.div(2);
+  const innerFlat = vmapInner(
+    OFFSETS.ref, params.angle, halfR
   ).reshape([SIDES * 2]);
   const pts = {};
-  for (let i = 0; i < SIDES; i++)
-    pts["p"+i] = point(
-      (i < SIDES-1 ? flat.ref : flat)
-        .slice([i*2, i*2+2]));
+  for (let i = 0; i < SIDES; i++) {
+    const lo = i === SIDES-1;
+    pts["out"+i] = point(
+      (lo ? outerFlat : outerFlat.ref).slice([i*2, i*2+2]));
+    const li = i === SIDES-1;
+    pts["in"+i] = point(
+      (li ? innerFlat : innerFlat.ref).slice([i*2, i*2+2]),
+      {fill: "#e11d48"});
+  }
   return pts;
 }, { radius: [120], angle: [0] });</textarea>
         <button class="run-btn">Run ▶</button>
@@ -291,24 +307,28 @@ const lineOpts = {"stroke-width": 3, "stroke-linecap": "round",
 
 return new G9((params) => {
   const pts = {};
-  function curve(from, to, dir, level, name) {
+  function dragon(fromPt, toPt, dir, level, name) {
     if (level === 0) {
-      pts["ln"+name] = line(np.concatenate([from,to]), lineOpts);
+      pts["ln"+name] = line(
+        np.concatenate([fromPt, toPt]), lineOpts);
     } else {
-      const diff = to.ref.sub(from.ref);
-      const mid = from.ref.add(to.ref)
-        .add(np.dot(ROT.ref, diff)
-          .mul(params.squareness.ref).mul(dir))
-        .div(2);
-      curve(from, mid.ref, -1, level-1, name+"l");
-      curve(mid, to, 1, level-1, name+"r");
+      const diff = toPt.ref.sub(fromPt.ref);
+      const rotated = np.dot(ROT.ref, diff);
+      const mid = fromPt.ref.add(toPt.ref)
+        .add(rotated.mul(params.squareness.ref).mul(dir))
+        .div(2.0);
+      dragon(fromPt, mid.ref, -1, level-1, name+"l");
+      dragon(mid, toPt, 1, level-1, name+"r");
     }
   }
-  curve(params.fromPt.ref, params.toPt.ref, -1, 5, "");
-  pts.from = point(params.fromPt.ref, {fill:"#0ea5e9", r:6});
-  pts.to = point(params.toPt.ref, {fill:"#0ea5e9", r:6});
+  dragon(params.fromPt.ref, params.toPt.ref, -1, 5, "");
+  pts["from"] = point(params.fromPt.ref,
+    {fill: "#0ea5e9", r: 6});
+  pts["to"] = point(params.toPt.ref,
+    {fill: "#0ea5e9", r: 6});
   return pts;
-}, {fromPt:[175,96], toPt:[-175,39], squareness:[0.8]});</textarea>
+}, {fromPt: [175,96], toPt: [-175,39],
+    squareness: [0.8]});</textarea>
         <button class="run-btn">Run ▶</button>
         <div class="error-msg"></div>
       </div>
@@ -325,11 +345,14 @@ return new G9((params) => {
         <textarea>return new G9((params) => {
   const pts = {};
   const PI_180 = Math.PI / 180;
-  function branch(base, len, angle, depth, name) {
+  function branch(base, length, angle, depth, name) {
     const rad = angle.ref.mul(PI_180);
-    const dir = np.concatenate([np.cos(rad.ref), np.sin(rad)]);
-    const tip = base.ref.add(dir.mul(len.ref));
-    pts["pt"+name] = point(tip.ref, {fill:"#22c55e", r:3});
+    const dx = np.cos(rad.ref);
+    const dy = np.sin(rad);
+    const dir = np.concatenate([dx, dy]);
+    const tip = base.ref.add(dir.mul(length.ref));
+    pts["pt"+name] = point(tip.ref,
+      {fill: "#22c55e", r: 3});
     pts["ln"+name] = line(np.concatenate([base, tip.ref]), {
       stroke: depth > 3 ? "#8B4513" : "#22c55e",
       "stroke-width": Math.max(1, depth*0.7+1),
@@ -337,19 +360,23 @@ return new G9((params) => {
       affects: {deltaAngle: true, attenuation: true},
     });
     if (depth > 0) {
-      branch(tip.ref, len.ref.mul(params.attenuation.ref),
-        angle.ref.add(params.deltaAngle.ref), depth-1, name+"l");
-      branch(tip, len.mul(params.attenuation.ref),
-        angle.sub(params.deltaAngle.ref), depth-1, name+"r");
+      const nl1 = length.ref.mul(params.attenuation.ref);
+      const la = angle.ref.add(params.deltaAngle.ref);
+      branch(tip.ref, nl1, la, depth-1, name+"l");
+      const nl2 = length.mul(params.attenuation.ref);
+      const ra = angle.sub(params.deltaAngle.ref);
+      branch(tip, nl2, ra, depth-1, name+"r");
     }
   }
-  branch(np.array([0,120], {dtype:np.float64}),
-    params.startLength.ref,
-    np.array([-90], {dtype:np.float64}), 4, "");
-  pts.root = point(np.array([0,120], {dtype:np.float64}),
-    {fill:"#8B4513", r:5, affects:{startLength:true}});
+  const root = np.array([0,120], {dtype: np.float64});
+  const startAngle = np.array([-90], {dtype: np.float64});
+  branch(root, params.startLength.ref, startAngle, 4, "");
+  pts["root"] = point(np.array([0,120], {dtype: np.float64}),
+    {fill: "#8B4513", r: 5,
+     affects: {startLength: true}});
   return pts;
-}, {deltaAngle:[33], startLength:[65], attenuation:[0.7]});</textarea>
+}, {deltaAngle: [33], startLength: [65],
+    attenuation: [0.7]});</textarea>
         <button class="run-btn">Run ▶</button>
         <div class="error-msg"></div>
       </div>
