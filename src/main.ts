@@ -1,6 +1,16 @@
 import { G9, point, line, np } from "./g9";
 import { defaultDevice, init } from "@jax-js/jax";
 
+// Pre-allocated constant matrices (hoisted out of render closures to avoid
+// re-creating identical arrays on every render/trace call).
+let FLIP_MATRIX: any;
+let REVERSE_MATRIX: any;
+
+function initConstants() {
+  FLIP_MATRIX = np.array([[0, 1], [1, 0]], { dtype: np.float64 });
+  REVERSE_MATRIX = np.array([[0, 1], [-1, 0]], { dtype: np.float64 });
+}
+
 function show(id) {
   const el = document.getElementById(id);
   if (el) el.style.display = "";
@@ -35,6 +45,8 @@ async function main() {
     }
   }
 
+  initConstants();
+
   setBanner('<span class="spinner"></span> Rendering demos…');
 
   // ---- Demo 1: Basic mirrored points ----
@@ -45,8 +57,7 @@ async function main() {
     new G9(
       (params) => {
         const xy = params.xy;
-        const flip = np.array([[0, 1], [1, 0]], { dtype: np.float64 });
-        const p2 = np.dot(flip, xy.ref);
+        const p2 = np.dot(FLIP_MATRIX.ref, xy.ref);
         return { p1: point(xy), p2: point(p2) };
       },
       { xy: [40, 0] },
@@ -60,28 +71,23 @@ async function main() {
   try {
     show("section-rings");
     const SIDES = 8;
-    const angleOffsets = [];
+    const angleOffsetArrays: any[] = [];
     for (let i = 0; i < SIDES; i++) {
-      angleOffsets.push((i / SIDES) * Math.PI * 2);
+      angleOffsetArrays.push(np.array([(i / SIDES) * Math.PI * 2], { dtype: np.float64 }));
     }
 
     new G9(
       (params) => {
         const pts = {};
         for (let i = 0; i < SIDES; i++) {
-          const offset = np.array([angleOffsets[i]], { dtype: np.float64 });
-          // angle.ref keeps angle alive for next iteration
-          const a = params.angle.ref.add(offset);
+          const a = params.angle.ref.add(angleOffsetArrays[i].ref);
 
-          // a used 3x: cos, sin, neg. Need a.ref on first two.
           const ox = np.cos(a.ref).mul(params.radius.ref);
           const oy = np.sin(a.ref).mul(params.radius.ref);
           pts[`out${i}`] = point(np.concatenate([ox, oy]));
 
-          // a consumed by .neg() (last use)
           const negA = a.neg();
           const halfR = params.radius.ref.div(2);
-          // negA used 2x: need .ref on first
           const ix = np.cos(negA.ref).mul(halfR.ref);
           const iy = np.sin(negA).mul(halfR);
           pts[`in${i}`] = point(np.concatenate([ix, iy]), { fill: "#e11d48" });
@@ -127,7 +133,6 @@ async function main() {
     show("section-dragon");
     new G9(
       (params) => {
-        const reverseM = np.array([[0, 1], [-1, 0]], { dtype: np.float64 });
         const lineOpts = {
           "stroke-width": 3,
           "stroke-linecap": "round",
@@ -143,7 +148,7 @@ async function main() {
           } else {
             // .ref keeps fromPt/toPt alive for reuse below
             const diff = toPt.ref.sub(fromPt.ref);
-            const rotated = np.dot(reverseM.ref, diff);
+            const rotated = np.dot(REVERSE_MATRIX.ref, diff);
             const mid = fromPt.ref
               .add(toPt.ref)
               .add(rotated.mul(params.squareness.ref).mul(dir))
