@@ -104,24 +104,7 @@ function buildAffectsMask(
   return mask;
 }
 
-type CachedJit = { jitLoss: any; jitGrad: any };
-
-function buildFlatLoss(
-  sizes: number[],
-  lossFn: LossFn,
-): (target: any, flat: any) => any {
-  return (target: any, flat: any) => {
-    const args: any[] = [];
-    let off = 0;
-    for (let i = 0; i < sizes.length; i++) {
-      const n = sizes[i];
-      const isLast = i === sizes.length - 1;
-      args.push(isLast ? flat.slice([off, off + n]) : flat.ref.slice([off, off + n]));
-      off += n;
-    }
-    return lossFn(target, ...args);
-  };
-}
+type CachedJit = { jitLoss: any; jitGrad: any; targetLen: number };
 
 export function minimize(
   params: ParamState[],
@@ -133,27 +116,38 @@ export function minimize(
 ): CachedJit {
   const sizes = params.map((p) => p.value.shape[0]);
   const dim = sizes.reduce((a, b) => a + b, 0);
-  if (dim === 0) return cached ?? { jitLoss: null, jitGrad: null };
+  if (dim === 0) return cached ?? { jitLoss: null, jitGrad: null, targetLen: 0 };
   const mask = buildAffectsMask(params, affects);
   let x = readVec(params);
 
+  const tLen = target.length;
+
   let jitLoss: any, jitGrad: any;
-  if (cached) {
+  if (cached && cached.targetLen === tLen) {
     jitLoss = cached.jitLoss;
     jitGrad = cached.jitGrad;
   } else {
-    const flatLoss = buildFlatLoss(sizes, lossFn);
-    jitLoss = jit(flatLoss);
-    const gradOfFlat = (target: any, flat: any) => jacfwd((f: any) => flatLoss(target, f))(flat);
-    jitGrad = jit(gradOfFlat);
+    const combinedFn = (combined: any) => {
+      const t = combined.ref.slice([0, tLen]);
+      const args: any[] = [];
+      let off = tLen;
+      for (let i = 0; i < sizes.length; i++) {
+        const n = sizes[i];
+        const isLast = i === sizes.length - 1;
+        args.push((isLast ? combined : combined.ref).slice([off, off + n]));
+        off += n;
+      }
+      return lossFn(t, ...args);
+    };
+    jitLoss = jit(combinedFn);
+    jitGrad = jit(jacfwd(combinedFn));
   }
 
-  const targetArr = np.array(target, { dtype: np.float64 });
-
   for (let it = 0; it < maxIter; it++) {
-    const xArr = np.array(x, { dtype: np.float64 });
-    const f0 = toJS(jitLoss(targetArr.ref, xArr.ref));
-    const g = toJSArr(jitGrad(targetArr.ref, xArr));
+    const combined = np.array([...target, ...x], { dtype: np.float64 });
+    const f0 = toJS(jitLoss(combined.ref));
+    const fullG = toJSArr(jitGrad(combined));
+    const g = fullG.slice(tLen);
     for (let i = 0; i < dim; i++) g[i] *= mask[i];
 
     let gnorm2 = 0;
@@ -169,8 +163,8 @@ export function minimize(
 
     for (let ls = 0; ls < 20; ls++) {
       const xn = x0.map((v, i) => v - lr * g[i]);
-      const xnArr = np.array(xn, { dtype: np.float64 });
-      const f1 = toJS(jitLoss(targetArr.ref, xnArr));
+      const lsArr = np.array([...target, ...xn], { dtype: np.float64 });
+      const f1 = toJS(jitLoss(lsArr));
       if (f1 < f0 - 1e-4 * lr * gnorm2) {
         x = xn;
         improved = true;
@@ -183,7 +177,7 @@ export function minimize(
   }
 
   writeVec(params, x);
-  return { jitLoss, jitGrad };
+  return { jitLoss, jitGrad, targetLen: tLen };
 }
 
 // ---------------------------------------------------------------------------
