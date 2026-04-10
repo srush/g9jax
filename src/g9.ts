@@ -215,6 +215,7 @@ class PointEl {
   g9!: G9;
   el!: SVGCircleElement;
   args!: ShapeArgs;
+  _cachedCoords!: number[];
 
   mount(
     id: string,
@@ -233,7 +234,7 @@ class PointEl {
     container.appendChild(this.el);
 
     addDrag(this.el, (_evt) => {
-      const c0 = toJSArr(this.args.c);
+      const c0 = this._cachedCoords;
       return (dx, dy) => {
         const tx = c0[0] + dx;
         const ty = c0[1] + dy;
@@ -259,6 +260,7 @@ class PointEl {
   update(args: ShapeArgs): void {
     this.args = args;
     const c = toJSArr(args.c);
+    this._cachedCoords = c;
     const a: Record<string, any> = { cx: c[0], cy: c[1] };
     if (args.fill) a.fill = args.fill;
     if (args.r) a.r = toJS(args.r);
@@ -273,6 +275,7 @@ class LineEl {
   g9!: G9;
   el!: SVGLineElement;
   args!: ShapeArgs;
+  _cachedCoords!: number[];
 
   mount(
     id: string,
@@ -291,7 +294,7 @@ class LineEl {
     container.appendChild(this.el);
 
     addDrag(this.el, (evt) => {
-      const c = toJSArr(this.args.c);
+      const c = this._cachedCoords;
       const off = g9.getOffset();
       const cx = evt.clientX - off.left;
       const cy = evt.clientY - off.top;
@@ -328,6 +331,7 @@ class LineEl {
   update(args: ShapeArgs): void {
     this.args = args;
     const c = toJSArr(args.c);
+    this._cachedCoords = c;
     const a: Record<string, any> = {
       x1: c[0],
       y1: c[1],
