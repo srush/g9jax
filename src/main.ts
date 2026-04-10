@@ -1,5 +1,5 @@
 import { G9, point, line, np } from "./g9";
-import { defaultDevice, init } from "@jax-js/jax";
+import { defaultDevice, init, vmap } from "@jax-js/jax";
 
 // Pre-allocated constant matrices (hoisted out of render closures to avoid
 // re-creating identical arrays on every render/trace call).
@@ -71,26 +71,38 @@ async function main() {
   try {
     show("section-rings");
     const SIDES = 8;
-    const angleOffsetArrays: any[] = [];
-    for (let i = 0; i < SIDES; i++) {
-      angleOffsetArrays.push(np.array([(i / SIDES) * Math.PI * 2], { dtype: np.float64 }));
-    }
+    const offsets: number[] = [];
+    for (let i = 0; i < SIDES; i++) offsets.push((i / SIDES) * Math.PI * 2);
+    const OFFSETS = np.array(offsets, { dtype: np.float64 });
+
+    const outerPoint = (offset: any, angle: any, radius: any) => {
+      const a = angle.add(offset);
+      const x = np.cos(a.ref).mul(radius.ref);
+      const y = np.sin(a).mul(radius);
+      return np.concatenate([x, y]);
+    };
+    const innerPoint = (offset: any, angle: any, radius: any) => {
+      const a = angle.add(offset).neg();
+      const x = np.cos(a.ref).mul(radius.ref);
+      const y = np.sin(a).mul(radius);
+      return np.concatenate([x, y]);
+    };
+    const vmapOuter = vmap(outerPoint, [0, null, null]);
+    const vmapInner = vmap(innerPoint, [0, null, null]);
 
     new G9(
       (params) => {
-        const pts = {};
+        const outerFlat = vmapOuter(OFFSETS.ref, params.angle.ref, params.radius.ref).reshape([SIDES * 2]);
+        const halfR = params.radius.div(2);
+        const innerFlat = vmapInner(OFFSETS.ref, params.angle, halfR).reshape([SIDES * 2]);
+
+        const pts: Record<string, any> = {};
         for (let i = 0; i < SIDES; i++) {
-          const a = params.angle.ref.add(angleOffsetArrays[i].ref);
+          const lastOuter = i === SIDES - 1;
+          pts[`out${i}`] = point((lastOuter ? outerFlat : outerFlat.ref).slice([i * 2, i * 2 + 2]));
 
-          const ox = np.cos(a.ref).mul(params.radius.ref);
-          const oy = np.sin(a.ref).mul(params.radius.ref);
-          pts[`out${i}`] = point(np.concatenate([ox, oy]));
-
-          const negA = a.neg();
-          const halfR = params.radius.ref.div(2);
-          const ix = np.cos(negA.ref).mul(halfR.ref);
-          const iy = np.sin(negA).mul(halfR);
-          pts[`in${i}`] = point(np.concatenate([ix, iy]), { fill: "#e11d48" });
+          const lastInner = i === SIDES - 1;
+          pts[`in${i}`] = point((lastInner ? innerFlat : innerFlat.ref).slice([i * 2, i * 2 + 2]), { fill: "#e11d48" });
         }
         return pts;
       },
@@ -201,20 +213,13 @@ async function main() {
           });
 
           if (depth > 0) {
-            // length.ref, angle.ref: keep alive for right branch
             const nl1 = length.ref.mul(params.attenuation.ref);
             const la = angle.ref.add(params.deltaAngle.ref);
             branch(tip.ref, nl1, la, depth - 1, name + "l");
 
-            // Last use of length and angle: consumed directly
             const nl2 = length.mul(params.attenuation.ref);
             const ra = angle.sub(params.deltaAngle.ref);
             branch(tip, nl2, ra, depth - 1, name + "r");
-          } else {
-            // Leaf: consume remaining refs
-            tip.dispose();
-            length.dispose();
-            angle.dispose();
           }
         }
 
