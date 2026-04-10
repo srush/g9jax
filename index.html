@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>g9-jaxjs | Automatically Interactive Graphics</title>
+  <style>
+    :root {
+      --bg: #fafaf9;
+      --fg: #1c1917;
+      --muted: #78716c;
+      --accent: #0ea5e9;
+      --border: #e7e5e4;
+      --card: #ffffff;
+      --radius: 8px;
+      --font: "Inter", system-ui, -apple-system, sans-serif;
+      --mono: "JetBrains Mono", "Fira Code", monospace;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--fg);
+      line-height: 1.6;
+    }
+
+    .hero {
+      text-align: center;
+      padding: 4rem 1rem 2rem;
+      max-width: 720px;
+      margin: 0 auto;
+    }
+    .hero h1 {
+      font-size: 2.4rem;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+    }
+    .hero h1 span { color: var(--accent); }
+    .hero p {
+      margin-top: 0.75rem;
+      color: var(--muted);
+      font-size: 1.1rem;
+    }
+    .hero .badges {
+      margin-top: 1rem;
+      display: flex;
+      gap: 0.5rem;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+    .badge {
+      display: inline-block;
+      padding: 0.2rem 0.65rem;
+      border-radius: 999px;
+      font-size: 0.8rem;
+      font-weight: 500;
+      background: #e0f2fe;
+      color: #0369a1;
+    }
+
+    .container {
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 0 1.5rem 4rem;
+    }
+
+    .demo-section {
+      margin-top: 3rem;
+    }
+    .demo-section h2 {
+      font-size: 1.5rem;
+      font-weight: 600;
+      margin-bottom: 0.25rem;
+    }
+    .demo-section .desc {
+      color: var(--muted);
+      margin-bottom: 1rem;
+      font-size: 0.95rem;
+    }
+    .demo-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .demo-canvas {
+      width: 100%;
+      height: 360px;
+      position: relative;
+      background: #fefce8;
+      border-bottom: 1px solid var(--border);
+    }
+    .demo-canvas svg {
+      width: 100%;
+      height: 100%;
+    }
+    .demo-code {
+      padding: 1rem 1.25rem;
+      overflow-x: auto;
+      background: #1e1e2e;
+      color: #cdd6f4;
+      font-family: var(--mono);
+      font-size: 0.82rem;
+      line-height: 1.65;
+      max-height: 320px;
+      overflow-y: auto;
+    }
+    .demo-code .kw { color: #cba6f7; }
+    .demo-code .fn { color: #89b4fa; }
+    .demo-code .str { color: #a6e3a1; }
+    .demo-code .num { color: #fab387; }
+    .demo-code .cmt { color: #6c7086; font-style: italic; }
+
+    #loading-banner {
+      text-align: center;
+      padding: 2rem 1rem;
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+    #loading-banner .spinner {
+      display: inline-block;
+      width: 20px;
+      height: 20px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+      vertical-align: middle;
+      margin-right: 0.5rem;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    footer {
+      text-align: center;
+      padding: 2rem 1rem;
+      color: var(--muted);
+      font-size: 0.85rem;
+      border-top: 1px solid var(--border);
+    }
+    footer a { color: var(--accent); text-decoration: none; }
+    footer a:hover { text-decoration: underline; }
+  </style>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+</head>
+<body>
+
+<div class="hero">
+  <h1>g9-<span>jaxjs</span></h1>
+  <p>Automatically interactive graphics powered by
+    <a href="https://github.com/ekzhang/jax-js" style="color:var(--accent);text-decoration:none;">jax-js</a>
+    forward-mode differentiation. Drag the shapes!</p>
+  <div class="badges">
+    <span class="badge">jvp forward-mode AD</span>
+    <span class="badge">jax-js</span>
+    <span class="badge">SVG</span>
+    <span class="badge">BFGS optimiser</span>
+  </div>
+</div>
+
+<div class="container">
+  <div id="loading-banner">
+    <span class="spinner"></span> Initialising jax-js&hellip;
+  </div>
+
+  <!-- Demo: Basic Points -->
+  <div class="demo-section" id="section-points" style="display:none">
+    <h2>Basic</h2>
+    <p class="desc">Two points: one at (x, y) and one at (y, x). Drag one and the other mirrors it.</p>
+    <div class="demo-card">
+      <div class="demo-canvas" id="demo-points"></div>
+      <div class="demo-code"><pre><span class="kw">const</span> render = <span class="fn">g9</span>(<span class="kw">function</span> (params) {
+  <span class="kw">const</span> xy = params.xy;
+  <span class="kw">const</span> flip = np.<span class="fn">array</span>([[<span class="num">0</span>,<span class="num">1</span>],[<span class="num">1</span>,<span class="num">0</span>]]);
+  <span class="kw">const</span> p2 = np.<span class="fn">dot</span>(flip, xy);
+  <span class="kw">return</span> {
+    p1: <span class="fn">point</span>(xy),
+    p2: <span class="fn">point</span>(p2),
+  };
+}, { xy: [<span class="num">40</span>, <span class="num">0</span>] });</pre></div>
+    </div>
+  </div>
+
+  <!-- Demo: Rings -->
+  <div class="demo-section" id="section-rings" style="display:none">
+    <h2>Rings</h2>
+    <p class="desc">Points arranged in two concentric circles using trigonometry. All controlled by radius and angle parameters.</p>
+    <div class="demo-card">
+      <div class="demo-canvas" id="demo-rings"></div>
+      <div class="demo-code"><pre><span class="kw">const</span> rings = <span class="fn">g9</span>(<span class="kw">function</span> (params) {
+  <span class="kw">const</span> points = {};
+  <span class="kw">const</span> sides = <span class="num">10</span>;
+  <span class="kw">for</span> (<span class="kw">let</span> i = <span class="num">0</span>; i &lt; sides; i++) {
+    <span class="kw">const</span> a = params.angle[<span class="num">0</span>] + i / sides * Math.PI * <span class="num">2</span>;
+    <span class="kw">const</span> ax = np.<span class="fn">array</span>([a]);
+    <span class="kw">const</span> t1x = np.<span class="fn">cos</span>(ax.ref.<span class="fn">neg</span>()).<span class="fn">mul</span>(params.radius);
+    <span class="kw">const</span> t1y = np.<span class="fn">sin</span>(ax.<span class="fn">neg</span>()).<span class="fn">mul</span>(params.radius);
+    <span class="cmt">// ...</span>
+  }
+  <span class="kw">return</span> points;
+}, { radius: [<span class="num">120</span>], angle: [<span class="num">0</span>] });</pre></div>
+    </div>
+  </div>
+
+  <!-- Demo: Lines -->
+  <div class="demo-section" id="section-lines" style="display:none">
+    <h2>Lines with affects</h2>
+    <p class="desc">Three lines with different <code>affects</code> constraints controlling which endpoints can move.</p>
+    <div class="demo-card">
+      <div class="demo-canvas" id="demo-lines"></div>
+      <div class="demo-code"><pre><span class="kw">const</span> lines = <span class="fn">g9</span>(<span class="kw">function</span> (params) {
+  <span class="kw">const</span> opts = { <span class="str">"stroke-width"</span>: <span class="num">8</span> };
+  <span class="kw">return</span> {
+    l1: <span class="fn">line</span>(params.line1, { stroke: <span class="str">'black'</span>, ...opts }),
+    l2: <span class="fn">line</span>(params.line2, { stroke: <span class="str">'#e11d48'</span>,
+         affects: { line2: [<span class="num">1</span>,<span class="num">1</span>,<span class="num">0</span>,<span class="num">0</span>] }, ...opts }),
+    l3: <span class="fn">line</span>(params.line3, { stroke: <span class="str">'#2563eb'</span>,
+         affects: { line3: [<span class="num">1</span>,<span class="num">0</span>,<span class="num">0</span>,<span class="num">1</span>] }, ...opts }),
+  };
+}, { line1: [-<span class="num">100</span>,-<span class="num">50</span>,<span class="num">100</span>,-<span class="num">50</span>],
+     line2: [-<span class="num">100</span>,<span class="num">0</span>,<span class="num">100</span>,<span class="num">0</span>],
+     line3: [-<span class="num">100</span>,<span class="num">50</span>,<span class="num">100</span>,<span class="num">50</span>] });</pre></div>
+    </div>
+  </div>
+
+  <!-- Demo: Dragon Curve -->
+  <div class="demo-section" id="section-dragon" style="display:none">
+    <h2>Dragon Curve</h2>
+    <p class="desc">A recursive dragon curve. Drag the endpoints or the curve to change its squareness.</p>
+    <div class="demo-card">
+      <div class="demo-canvas" id="demo-dragon"></div>
+      <div class="demo-code"><pre><span class="kw">const</span> dragon = <span class="fn">g9</span>(<span class="kw">function</span> (params) {
+  <span class="kw">const</span> points = {};
+  <span class="kw">function</span> <span class="fn">curve</span>(from, to, dir, level, name) {
+    <span class="kw">if</span> (level === <span class="num">0</span>) {
+      points[<span class="str">"ln"</span>+name] = <span class="fn">line</span>(np.<span class="fn">concatenate</span>([from,to]));
+    } <span class="kw">else</span> {
+      <span class="kw">const</span> rot = np.<span class="fn">array</span>([[<span class="num">0</span>,<span class="num">1</span>],[<span class="num">-1</span>,<span class="num">0</span>]]);
+      <span class="kw">const</span> mid = from.ref.<span class="fn">add</span>(to.ref)
+        .<span class="fn">add</span>(np.<span class="fn">dot</span>(rot,to.ref.<span class="fn">sub</span>(from.ref))
+        .<span class="fn">mul</span>(params.squareness).<span class="fn">mul</span>(dir))
+        .<span class="fn">div</span>(<span class="num">2</span>);
+      <span class="fn">curve</span>(from, mid.ref, <span class="num">-1</span>, level-<span class="num">1</span>, name+<span class="str">"l"</span>);
+      <span class="fn">curve</span>(mid, to, <span class="num">1</span>, level-<span class="num">1</span>, name+<span class="str">"r"</span>);
+    }
+  }
+  <span class="fn">curve</span>(params.fromPt, params.toPt, <span class="num">-1</span>, <span class="num">5</span>, <span class="str">""</span>);
+  points.from = <span class="fn">point</span>(params.fromPt.ref);
+  points.to = <span class="fn">point</span>(params.toPt.ref);
+  <span class="kw">return</span> points;
+}, { fromPt:[<span class="num">175</span>,<span class="num">96</span>], toPt:[-<span class="num">175</span>,<span class="num">39</span>], squareness:[<span class="num">0.8</span>] });</pre></div>
+    </div>
+  </div>
+
+  <!-- Demo: Tree -->
+  <div class="demo-section" id="section-tree" style="display:none">
+    <h2>Fractal Tree</h2>
+    <p class="desc">A recursive tree. Drag branches to change the split angle and attenuation.</p>
+    <div class="demo-card">
+      <div class="demo-canvas" id="demo-tree"></div>
+      <div class="demo-code"><pre><span class="kw">const</span> tree = <span class="fn">g9</span>(<span class="kw">function</span> (params) {
+  <span class="kw">const</span> points = {};
+  <span class="kw">function</span> <span class="fn">branch</span>(pt, len, angle, n, name) {
+    <span class="kw">const</span> rad = angle.<span class="fn">mul</span>(Math.PI / <span class="num">180</span>);
+    <span class="kw">const</span> dir = np.<span class="fn">stack</span>([np.<span class="fn">cos</span>(rad.ref), np.<span class="fn">sin</span>(rad)]);
+    <span class="kw">const</span> next = pt.ref.<span class="fn">add</span>(dir.<span class="fn">mul</span>(len.ref));
+    points[<span class="str">"pt"</span>+name] = <span class="fn">point</span>(next.ref, {fill:<span class="str">"green"</span>});
+    points[<span class="str">"ln"</span>+name] = <span class="fn">line</span>(np.<span class="fn">concatenate</span>([pt,next.ref]),
+      { stroke: n > <span class="num">3</span> ? <span class="str">"brown"</span> : <span class="str">"green"</span>,
+        affects: {deltaAngle:<span class="kw">true</span>, attenuation:<span class="kw">true</span>},
+        <span class="str">"stroke-width"</span>: <span class="num">3</span> });
+    <span class="kw">if</span> (n > <span class="num">0</span>) {
+      <span class="fn">branch</span>(next.ref, len.<span class="fn">mul</span>(params.attenuation.ref),
+        angle.ref.<span class="fn">add</span>(params.deltaAngle.ref), n-<span class="num">1</span>, name+<span class="str">"l"</span>);
+      <span class="fn">branch</span>(next, len.<span class="fn">mul</span>(params.attenuation),
+        angle.<span class="fn">sub</span>(params.deltaAngle), n-<span class="num">1</span>, name+<span class="str">"r"</span>);
+    }
+  }
+  <span class="fn">branch</span>(...);
+  <span class="kw">return</span> points;
+}, { deltaAngle:[<span class="num">33</span>], startLength:[<span class="num">75</span>], attenuation:[<span class="num">0.7</span>] });</pre></div>
+    </div>
+  </div>
+
+</div>
+
+<footer>
+  Inspired by <a href="https://omrelli.ug/g9/">g9.js</a> and
+  <a href="https://github.com/srush/g9py">g9py</a>.
+  Built with <a href="https://github.com/ekzhang/jax-js">jax-js</a> forward-mode AD.
+</footer>
+
+<script type="module" src="/src/main.js"></script>
+</body>
+</html>
