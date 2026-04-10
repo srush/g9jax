@@ -1,4 +1,4 @@
-import { G9, point, line, np } from "./g9.js";
+import { G9, point, line, np } from "./g9";
 import { init } from "@jax-js/jax";
 
 function show(id) {

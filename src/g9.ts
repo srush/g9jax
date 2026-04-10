@@ -1,14 +1,28 @@
 import { numpy as np, jvp } from "@jax-js/jax";
 
+type ShapeArgs = { type: "point" | "line"; c: any } & Record<string, any>;
+type ParamState = { name: string; value: any };
+type LossFn = (...values: any[]) => any;
+type RenderFn = (
+  params: Record<string, any>,
+  targetId: string | null,
+) => Record<string, ShapeArgs>;
+
 // ---------------------------------------------------------------------------
 // Shape helpers
 // ---------------------------------------------------------------------------
 
-export function point(loc, opts = {}) {
+export function point(
+  loc: any,
+  opts: Record<string, any> = {},
+): ShapeArgs {
   return { type: "point", c: loc, ...opts };
 }
 
-export function line(loc, opts = {}) {
+export function line(
+  loc: any,
+  opts: Record<string, any> = {},
+): ShapeArgs {
   return { type: "line", c: loc, ...opts };
 }
 
@@ -18,20 +32,20 @@ export function line(loc, opts = {}) {
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
-function setAttrs(el, attrs) {
+function setAttrs(el: Element, attrs: Record<string, any>): void {
   for (const [k, v] of Object.entries(attrs)) {
     if (v != null) el.setAttributeNS(null, k, String(v));
   }
 }
 
-function toJS(x) {
+function toJS(x: any): any {
   if (typeof x === "number") return x;
   if (typeof x?.dataSync === "function") return x.dataSync()[0];
   if (typeof x?.js === "function") return x.js();
   return Number(x);
 }
 
-function toJSArr(arr) {
+function toJSArr(arr: any): number[] {
   if (typeof arr?.dataSync === "function") return Array.from(arr.dataSync());
   if (typeof arr?.js === "function") {
     const v = arr.js();
@@ -48,7 +62,10 @@ function toJSArr(arr) {
 // jvp once per component with a one-hot tangent vector (basis direction).
 // ---------------------------------------------------------------------------
 
-function forwardGrad(scalarFn, paramArrays) {
+function forwardGrad(
+  scalarFn: LossFn,
+  paramArrays: any[],
+): Float64Array {
   const sizes = paramArrays.map((p) => p.shape[0]);
   const total = sizes.reduce((a, b) => a + b, 0);
   const grad = new Float64Array(total);
@@ -80,13 +97,13 @@ function forwardGrad(scalarFn, paramArrays) {
 // Gradient descent with backtracking line search
 // ---------------------------------------------------------------------------
 
-function readVec(params) {
+function readVec(params: ParamState[]): number[] {
   const vals = [];
   for (const p of params) for (const v of toJSArr(p.value)) vals.push(v);
   return vals;
 }
 
-function writeVec(params, x) {
+function writeVec(params: ParamState[], x: number[]): void {
   let off = 0;
   for (const p of params) {
     const n = p.value.shape[0];
@@ -95,7 +112,10 @@ function writeVec(params, x) {
   }
 }
 
-function buildAffectsMask(params, affects) {
+function buildAffectsMask(
+  params: ParamState[],
+  affects: Record<string, any> | null | undefined,
+): Float64Array {
   const total = params.reduce((s, p) => s + p.value.shape[0], 0);
   const mask = new Float64Array(total).fill(1);
   if (!affects) return mask;
@@ -118,7 +138,12 @@ function buildAffectsMask(params, affects) {
   return mask;
 }
 
-export function minimize(params, lossFn, affects, maxIter = 30) {
+export function minimize(
+  params: ParamState[],
+  lossFn: LossFn,
+  affects: Record<string, any> | null | undefined,
+  maxIter = 30,
+): void {
   const dim = params.reduce((s, p) => s + p.value.shape[0], 0);
   if (dim === 0) return;
   const mask = buildAffectsMask(params, affects);
@@ -169,7 +194,21 @@ export function minimize(params, lossFn, affects, maxIter = 30) {
 // ---------------------------------------------------------------------------
 
 class PointEl {
-  mount(id, container, doMinimize, g9) {
+  container!: SVGSVGElement;
+  g9!: G9;
+  el!: SVGCircleElement;
+  args!: ShapeArgs;
+
+  mount(
+    id: string,
+    container: SVGSVGElement,
+    doMinimize: (
+      id: string,
+      lossFn: LossFn,
+      affects: Record<string, any> | null | undefined,
+    ) => void,
+    g9: G9,
+  ): void {
     this.container = container;
     this.g9 = g9;
     this.el = document.createElementNS(SVG_NS, "circle");
@@ -196,11 +235,14 @@ class PointEl {
       };
     });
   }
-  unmount() { this.container.removeChild(this.el); }
-  update(args) {
+  unmount(): void {
+    this.container.removeChild(this.el);
+  }
+
+  update(args: ShapeArgs): void {
     this.args = args;
     const c = toJSArr(args.c);
-    const a = { cx: c[0], cy: c[1] };
+    const a: Record<string, any> = { cx: c[0], cy: c[1] };
     if (args.fill) a.fill = args.fill;
     if (args.r) a.r = toJS(args.r);
     if (args.stroke) a.stroke = args.stroke;
@@ -210,7 +252,21 @@ class PointEl {
 }
 
 class LineEl {
-  mount(id, container, doMinimize, g9) {
+  container!: SVGSVGElement;
+  g9!: G9;
+  el!: SVGLineElement;
+  args!: ShapeArgs;
+
+  mount(
+    id: string,
+    container: SVGSVGElement,
+    doMinimize: (
+      id: string,
+      lossFn: LossFn,
+      affects: Record<string, any> | null | undefined,
+    ) => void,
+    g9: G9,
+  ): void {
     this.container = container;
     this.g9 = g9;
     this.el = document.createElementNS(SVG_NS, "line");
@@ -235,7 +291,7 @@ class LineEl {
             const shapes = g9._callRender(pv, id);
             if (!shapes?.[id]) return np.array([0], { dtype: np.float64 });
             const cv = shapes[id].c;
-            const fromPt = cv.slice([0, 2]);
+            const fromPt = cv.ref.slice([0, 2]);
             const toPt = cv.slice([2, 4]);
             const dir = toPt.sub(fromPt.ref);
             const predicted = fromPt.add(dir.mul(r));
@@ -248,11 +304,19 @@ class LineEl {
       };
     });
   }
-  unmount() { this.container.removeChild(this.el); }
-  update(args) {
+  unmount(): void {
+    this.container.removeChild(this.el);
+  }
+
+  update(args: ShapeArgs): void {
     this.args = args;
     const c = toJSArr(args.c);
-    const a = { x1: c[0], y1: c[1], x2: c[2], y2: c[3] };
+    const a: Record<string, any> = {
+      x1: c[0],
+      y1: c[1],
+      x2: c[2],
+      y2: c[3],
+    };
     if (args.stroke) a.stroke = args.stroke;
     if (args["stroke-width"]) a["stroke-width"] = args["stroke-width"];
     if (args["stroke-linecap"]) a["stroke-linecap"] = args["stroke-linecap"];
@@ -264,20 +328,27 @@ class LineEl {
 // Mouse / touch drag
 // ---------------------------------------------------------------------------
 
-function addDrag(el, onStartCb) {
-  function start(e) {
+function addDrag(
+  el: SVGElement,
+  onStartCb: (event: MouseEvent | Touch) => (dx: number, dy: number) => void,
+): void {
+  function firstPointer(event: MouseEvent | TouchEvent): MouseEvent | Touch {
+    return "touches" in event ? event.touches[0] : event;
+  }
+
+  function start(e: MouseEvent | TouchEvent) {
     e.stopPropagation();
     e.preventDefault();
-    const f = e.touches ? e.touches[0] : e;
+    const f = firstPointer(e);
     const onDrag = onStartCb(f);
     const sx = f.clientX, sy = f.clientY;
 
-    function move(ev) {
+    function move(ev: MouseEvent | TouchEvent) {
       ev.preventDefault();
-      const m = ev.touches ? ev.touches[0] : ev;
+      const m = firstPointer(ev);
       onDrag(m.clientX - sx, m.clientY - sy);
     }
-    function end(ev) {
+    function end(ev: MouseEvent | TouchEvent) {
       ev.preventDefault();
       document.removeEventListener("mousemove", move);
       document.removeEventListener("touchmove", move);
@@ -300,7 +371,21 @@ function addDrag(el, onStartCb) {
 // ---------------------------------------------------------------------------
 
 export class G9 {
-  constructor(renderFn, initialParams) {
+  renderFn: RenderFn;
+  params: ParamState[];
+  elements: Record<string, PointEl | LineEl>;
+  node: SVGSVGElement;
+  parent: Element | null;
+  xAlign: string;
+  yAlign: string;
+  xOff: number;
+  yOff: number;
+  _rect: DOMRect | null;
+
+  constructor(
+    renderFn: RenderFn,
+    initialParams: Record<string, number | number[]>,
+  ) {
     this.renderFn = renderFn;
     this.params = [];
     for (const [name, value] of Object.entries(initialParams)) {
@@ -320,19 +405,19 @@ export class G9 {
     this._rect = null;
   }
 
-  getOffset() {
+  getOffset(): { top: number; left: number } {
     const r = this._rect || { top: 0, left: 0 };
     return { top: r.top + this.yOff, left: r.left + this.xOff };
   }
 
-  align(x = "center", y = "center") {
+  align(x = "center", y = "center"): this {
     this.xAlign = x;
     this.yAlign = y;
     this.resize();
     return this;
   }
 
-  resize(rerender = true) {
+  resize(rerender = true): void {
     if (!this.parent) return;
     const r = this.parent.getBoundingClientRect();
     this._rect = r;
@@ -342,7 +427,7 @@ export class G9 {
     if (rerender) this.render();
   }
 
-  insertInto(sel) {
+  insertInto(sel: string | Element): this {
     this.parent = typeof sel === "string" ? document.querySelector(sel) : sel;
     this.parent.textContent = "";
     this.parent.appendChild(this.node);
@@ -352,20 +437,27 @@ export class G9 {
     return this;
   }
 
-  _callRender(paramValues, targetId) {
-    const obj = {};
+  _callRender(
+    paramValues: any[],
+    targetId: string | null,
+  ): Record<string, ShapeArgs> {
+    const obj: Record<string, any> = {};
     for (let i = 0; i < this.params.length; i++) {
       obj[this.params[i].name] = paramValues[i];
     }
     return this.renderFn(obj, targetId);
   }
 
-  _minimize(id, lossFn, affects) {
+  _minimize(
+    id: string,
+    lossFn: LossFn,
+    affects: Record<string, any> | null | undefined,
+  ): void {
     minimize(this.params, lossFn, affects, 30);
     this.render();
   }
 
-  render() {
+  render(): void {
     const vals = this.params.map((p) => p.value.ref);
     const renderables = this._callRender(vals, null);
     if (!renderables) return;
