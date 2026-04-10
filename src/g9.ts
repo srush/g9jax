@@ -1,4 +1,4 @@
-import { numpy as np, jvp } from "@jax-js/jax";
+import { numpy as np, jit, jvp, linearize } from "@jax-js/jax";
 
 type ShapeArgs = { type: "point" | "line"; c: any } & Record<string, any>;
 type ParamState = { name: string; value: any };
@@ -58,11 +58,54 @@ function toJSArr(arr: any): number[] {
 // ---------------------------------------------------------------------------
 // Forward-mode gradient computation
 //
-// Given f(x1,...,xN) -> scalar, compute df/dxi for each component by calling
-// jvp once per component with a one-hot tangent vector (basis direction).
+// Uses linearize() when possible: traces scalarFn once and returns a linear
+// map that can be evaluated for each one-hot tangent direction without
+// re-tracing.  Falls back to per-component jvp() for functions that
+// linearize cannot handle (e.g. those with .dispose() on traced values).
 // ---------------------------------------------------------------------------
 
-function forwardGrad(
+function forwardGradLinearize(
+  scalarFn: LossFn,
+  paramArrays: any[],
+): Float64Array | null {
+  const sizes = paramArrays.map((p) => p.shape[0]);
+  const total = sizes.reduce((a, b) => a + b, 0);
+  const grad = new Float64Array(total);
+
+  const primals = paramArrays.map((p) => p.ref);
+  let linFn: any;
+  try {
+    const [, fn] = linearize(scalarFn, primals);
+    linFn = fn;
+  } catch {
+    return null;
+  }
+
+  try {
+    let col = 0;
+    for (let pi = 0; pi < paramArrays.length; pi++) {
+      for (let j = 0; j < sizes[pi]; j++) {
+        const tangents = paramArrays.map((p, idx) => {
+          const buf = Array(sizes[idx]).fill(0);
+          if (idx === pi) buf[j] = 1.0;
+          return np.array(buf, { dtype: np.float64 });
+        });
+        try {
+          const tOut = linFn(...tangents);
+          grad[col] = toJS(tOut);
+        } catch {
+          return null;
+        }
+        col++;
+      }
+    }
+  } finally {
+    linFn?.dispose?.();
+  }
+  return grad;
+}
+
+function forwardGradJvp(
   scalarFn: LossFn,
   paramArrays: any[],
 ): Float64Array {
@@ -79,7 +122,6 @@ function forwardGrad(
         return np.array(buf, { dtype: np.float64 });
       });
       const primals = paramArrays.map((p) => p.ref);
-
       try {
         const [, tOut] = jvp(scalarFn, primals, tangents);
         grad[col] = toJS(tOut);
@@ -91,6 +133,14 @@ function forwardGrad(
     }
   }
   return grad;
+}
+
+function forwardGrad(
+  scalarFn: LossFn,
+  paramArrays: any[],
+): Float64Array {
+  return forwardGradLinearize(scalarFn, paramArrays) ??
+    forwardGradJvp(scalarFn, paramArrays);
 }
 
 // ---------------------------------------------------------------------------
@@ -159,9 +209,16 @@ export function minimize(
   const mask = buildAffectsMask(params, affects);
   let x = readVec(params);
 
+  let jitLossFn: any;
+  try {
+    jitLossFn = jit(lossFn);
+  } catch {
+    jitLossFn = lossFn;
+  }
+
   function evalLossAt(values: number[]) {
     const arrays = buildEvalArrays(params, values);
-    const loss = lossFn(...arrays.map((arr) => arr.ref));
+    const loss = jitLossFn(...arrays.map((arr) => arr.ref));
     const out = toJS(loss);
     arrays.forEach((arr) => arr.dispose?.());
     return out;
@@ -175,32 +232,36 @@ export function minimize(
     return g;
   }
 
-  for (let it = 0; it < maxIter; it++) {
-    const f0 = evalLossAt(x);
-    const g = evalGradAt(x);
+  try {
+    for (let it = 0; it < maxIter; it++) {
+      const f0 = evalLossAt(x);
+      const g = evalGradAt(x);
 
-    let gnorm2 = 0;
-    for (let i = 0; i < dim; i++) gnorm2 += g[i] * g[i];
-    if (gnorm2 < 1e-12) break;
+      let gnorm2 = 0;
+      for (let i = 0; i < dim; i++) gnorm2 += g[i] * g[i];
+      if (gnorm2 < 1e-12) break;
 
-    const x0 = x.slice();
-    let lr = 1.0;
-    let improved = false;
+      const x0 = x.slice();
+      let lr = 1.0;
+      let improved = false;
 
-    for (let ls = 0; ls < 10; ls++) {
-      const xn = x0.map((v, i) => v - lr * g[i]);
-      const f1 = evalLossAt(xn);
-      if (f1 < f0 - 1e-4 * lr * gnorm2) {
-        x = xn;
-        improved = true;
+      for (let ls = 0; ls < 10; ls++) {
+        const xn = x0.map((v, i) => v - lr * g[i]);
+        const f1 = evalLossAt(xn);
+        if (f1 < f0 - 1e-4 * lr * gnorm2) {
+          x = xn;
+          improved = true;
+          break;
+        }
+        lr *= 0.5;
+      }
+
+      if (!improved) {
         break;
       }
-      lr *= 0.5;
     }
-
-    if (!improved) {
-      break;
-    }
+  } finally {
+    jitLossFn?.dispose?.();
   }
 
   writeVec(params, x);
@@ -501,4 +562,4 @@ export class G9 {
   }
 }
 
-export { np };
+export { np, jit };
