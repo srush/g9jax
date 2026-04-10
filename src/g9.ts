@@ -87,14 +87,6 @@ function readVec(params: ParamState[]): number[] {
   return vals;
 }
 
-function readVecNonDestructive(params: ParamState[]): number[] {
-  const vals: number[] = [];
-  for (const p of params) {
-    const arr = p.value.ref;
-    for (const v of toJSArr(arr)) vals.push(v);
-  }
-  return vals;
-}
 
 function writeVec(params: ParamState[], sizes: number[], x: number[]): void {
   let off = 0;
@@ -132,7 +124,7 @@ function buildAffectsMask(
   return mask;
 }
 
-type CachedJit = { jitLoss: any; jitGrad: any; jitRender: any; targetLen: number };
+type CachedJit = { jitLoss: any; jitGrad: any; jitRender: any; renderIds: string[]; targetLen: number; lastX: number[] };
 
 export function minimize(
   params: ParamState[],
@@ -146,13 +138,14 @@ export function minimize(
   const sizes = params.map((p) => p.value.shape[0]);
   const paramNames = params.map((p) => p.name);
   const dim = sizes.reduce((a, b) => a + b, 0);
-  if (dim === 0) return cached ?? { jitLoss: null, jitGrad: null, jitRender: null, targetLen: 0 };
+  if (dim === 0) return cached ?? { jitLoss: null, jitGrad: null, jitRender: null, renderIds: [], targetLen: 0, lastX: [] };
   const mask = buildAffectsMask(params, sizes, affects);
   let x = readVec(params);
 
   const tLen = target.length;
 
   let jitLoss: any, jitGrad: any, jitRender: any;
+  let renderIds: string[] = cached?.renderIds ?? [];
   if (cached && cached.targetLen === tLen) {
     jitLoss = cached.jitLoss;
     jitGrad = cached.jitGrad;
@@ -184,7 +177,11 @@ export function minimize(
         pv.push((isLast ? flat : flat.ref).slice([off, off + n]));
         off += n;
       }
-      return renderCoords(renderFn, paramNames, pv);
+      const coords = renderCoords(renderFn, paramNames, pv);
+      renderIds = Object.keys(coords);
+      const arrays: any[] = [];
+      for (const c of Object.values(coords)) arrays.push(c);
+      return np.concatenate(arrays);
     };
     jitLoss = jit(combinedFn);
     jitGrad = jit(jacfwd(combinedFn));
@@ -225,7 +222,7 @@ export function minimize(
   }
 
   writeVec(params, sizes, x);
-  return { jitLoss, jitGrad, jitRender, targetLen: tLen };
+  return { jitLoss, jitGrad, jitRender, renderIds, targetLen: tLen, lastX: x };
 }
 
 // ---------------------------------------------------------------------------
@@ -485,31 +482,20 @@ export class G9 {
     cached?: CachedJit,
   ): CachedJit {
     const c = minimize(this.params, this.renderFn, lossFn, target, affects, 10, cached);
-    this._renderFast(c.jitRender);
+    this._renderFast(c);
     return c;
   }
 
-  _renderFast(jitRender: any): void {
-    const x = readVecNonDestructive(this.params);
-    const flat = np.array(x, { dtype: np.float64 });
-    const coords: Record<string, any> = jitRender(flat);
-
-    const allArrays: any[] = [];
-    const ids: string[] = [];
-    for (const [id, c] of Object.entries(coords)) {
-      ids.push(id);
-      allArrays.push(c);
-    }
-    if (allArrays.length === 0) return;
-
-    const concatenated = np.concatenate(allArrays);
-    const allCoords: number[] = typeof concatenated?.dataSync === "function"
-      ? Array.from(concatenated.dataSync())
-      : toJSArr(concatenated);
+  _renderFast(cached: CachedJit): void {
+    const flat = np.array(cached.lastX, { dtype: np.float64 });
+    const result = cached.jitRender(flat);
+    const allCoords: number[] = typeof result?.dataSync === "function"
+      ? Array.from(result.dataSync())
+      : toJSArr(result);
 
     let off = 0;
-    for (let i = 0; i < ids.length; i++) {
-      const elem = this.elements[ids[i]];
+    for (const id of cached.renderIds) {
+      const elem = this.elements[id];
       if (!elem) continue;
       const n = elem instanceof LineEl ? 4 : 2;
       elem.updateCoords(allCoords.slice(off, off + n));
