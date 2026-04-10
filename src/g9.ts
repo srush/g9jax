@@ -2,10 +2,9 @@ import { numpy as np, jit, jacfwd } from "@jax-js/jax";
 
 type ShapeArgs = { type: "point" | "line"; c: any } & Record<string, any>;
 type ParamState = { name: string; value: any };
-type LossFn = (target: any, ...values: any[]) => any;
+type LossFn = (target: any, coords: Record<string, any>) => any;
 type RenderFn = (
   params: Record<string, any>,
-  targetId: string | null,
 ) => Record<string, ShapeArgs>;
 
 // ---------------------------------------------------------------------------
@@ -56,11 +55,30 @@ function toJSArr(arr: any): number[] {
 }
 
 // ---------------------------------------------------------------------------
+// Coordinate-only render: returns Record<string, Array> (a JsTree).
+// The render function returns ShapeArgs with { type, c, ...opts }.
+// We strip everything except c, giving jax a pure JsTree to trace through.
+// ---------------------------------------------------------------------------
+
+function renderCoords(
+  renderFn: RenderFn,
+  paramNames: string[],
+  paramValues: any[],
+): Record<string, any> {
+  const obj: Record<string, any> = {};
+  for (let i = 0; i < paramNames.length; i++) {
+    obj[paramNames[i]] = paramValues[i];
+  }
+  const shapes = renderFn(obj);
+  const coords: Record<string, any> = {};
+  for (const [id, shape] of Object.entries(shapes)) {
+    coords[id] = shape.c;
+  }
+  return coords;
+}
+
+// ---------------------------------------------------------------------------
 // Gradient descent with backtracking line search
-//
-// grad() with argnums differentiates w.r.t. all params in one call -- no
-// per-component loop.  Both grad and loss are jit-compiled so repeated
-// calls during drag reuse cached traces.
 // ---------------------------------------------------------------------------
 
 function readVec(params: ParamState[]): number[] {
@@ -69,30 +87,31 @@ function readVec(params: ParamState[]): number[] {
   return vals;
 }
 
-function writeVec(params: ParamState[], x: number[]): void {
+function writeVec(params: ParamState[], sizes: number[], x: number[]): void {
   let off = 0;
-  for (const p of params) {
-    const n = p.value.shape[0];
-    p.value = np.array(x.slice(off, off + n), { dtype: np.float64 });
+  for (let i = 0; i < params.length; i++) {
+    const n = sizes[i];
+    params[i].value = np.array(x.slice(off, off + n), { dtype: np.float64 });
     off += n;
   }
 }
 
 function buildAffectsMask(
   params: ParamState[],
+  sizes: number[],
   affects: Record<string, any> | null | undefined,
 ): Float64Array {
-  const total = params.reduce((s, p) => s + p.value.shape[0], 0);
+  const total = sizes.reduce((a, b) => a + b, 0);
   const mask = new Float64Array(total).fill(1);
   if (!affects) return mask;
   let idx = 0;
-  for (const p of params) {
-    const n = p.value.shape[0];
+  for (let pi = 0; pi < params.length; pi++) {
+    const n = sizes[pi];
     for (let j = 0; j < n; j++) {
-      if (!(p.name in affects)) {
+      if (!(params[pi].name in affects)) {
         mask[idx] = 0;
       } else {
-        const a = affects[p.name];
+        const a = affects[params[pi].name];
         if (a !== true) {
           const av = Array.isArray(a) ? a : toJSArr(a);
           if (av[j] === 0) mask[idx] = 0;
@@ -108,6 +127,7 @@ type CachedJit = { jitLoss: any; jitGrad: any; targetLen: number };
 
 export function minimize(
   params: ParamState[],
+  renderFn: RenderFn,
   lossFn: LossFn,
   target: number[],
   affects: Record<string, any> | null | undefined,
@@ -115,9 +135,10 @@ export function minimize(
   cached?: CachedJit,
 ): CachedJit {
   const sizes = params.map((p) => p.value.shape[0]);
+  const paramNames = params.map((p) => p.name);
   const dim = sizes.reduce((a, b) => a + b, 0);
   if (dim === 0) return cached ?? { jitLoss: null, jitGrad: null, targetLen: 0 };
-  const mask = buildAffectsMask(params, affects);
+  const mask = buildAffectsMask(params, sizes, affects);
   let x = readVec(params);
 
   const tLen = target.length;
@@ -129,15 +150,16 @@ export function minimize(
   } else {
     const combinedFn = (combined: any) => {
       const t = combined.ref.slice([0, tLen]);
-      const args: any[] = [];
+      const pv: any[] = [];
       let off = tLen;
       for (let i = 0; i < sizes.length; i++) {
         const n = sizes[i];
         const isLast = i === sizes.length - 1;
-        args.push((isLast ? combined : combined.ref).slice([off, off + n]));
+        pv.push((isLast ? combined : combined.ref).slice([off, off + n]));
         off += n;
       }
-      return lossFn(t, ...args);
+      const coords = renderCoords(renderFn, paramNames, pv);
+      return lossFn(t, coords);
     };
     jitLoss = jit(combinedFn);
     jitGrad = jit(jacfwd(combinedFn));
@@ -176,7 +198,7 @@ export function minimize(
     if (!improved) break;
   }
 
-  writeVec(params, x);
+  writeVec(params, sizes, x);
   return { jitLoss, jitGrad, targetLen: tLen };
 }
 
@@ -211,11 +233,9 @@ class PointEl {
 
     addDrag(this.el, (_evt) => {
       const c0 = this._cachedCoords;
-      const lossFn: LossFn = (target, ...pv) => {
-        const shapes = g9._callRender(pv, id);
-        if (!shapes?.[id]) return np.array([0], { dtype: np.float64 });
-        const c = shapes[id].c;
-        const d = c.sub(target);
+      const lossFn: LossFn = (target, coords) => {
+        if (!coords[id]) return np.array([0], { dtype: np.float64 });
+        const d = coords[id].sub(target);
         return d.ref.mul(d).sum();
       };
       let cached: CachedJit | undefined;
@@ -276,10 +296,9 @@ class LineEl {
       const ll = Math.sqrt(ldx * ldx + ldy * ldy) || 1;
       const r = Math.sqrt(pdx * pdx + pdy * pdy) / ll;
 
-      const lossFn: LossFn = (target, ...pv) => {
-        const shapes = g9._callRender(pv, id);
-        if (!shapes?.[id]) return np.array([0], { dtype: np.float64 });
-        const cv = shapes[id].c;
+      const lossFn: LossFn = (target, coords) => {
+        if (!coords[id]) return np.array([0], { dtype: np.float64 });
+        const cv = coords[id];
         const fromPt = cv.ref.slice([0, 2]);
         const toPt = cv.slice([2, 4]);
         const dir = toPt.sub(fromPt.ref);
@@ -427,17 +446,6 @@ export class G9 {
     return this;
   }
 
-  _callRender(
-    paramValues: any[],
-    targetId: string | null,
-  ): Record<string, ShapeArgs> {
-    const obj: Record<string, any> = {};
-    for (let i = 0; i < this.params.length; i++) {
-      obj[this.params[i].name] = paramValues[i];
-    }
-    return this.renderFn(obj, targetId);
-  }
-
   _minimize(
     id: string,
     lossFn: LossFn,
@@ -445,14 +453,15 @@ export class G9 {
     affects: Record<string, any> | null | undefined,
     cached?: CachedJit,
   ): CachedJit {
-    const c = minimize(this.params, lossFn, target, affects, 30, cached);
+    const c = minimize(this.params, this.renderFn, lossFn, target, affects, 30, cached);
     this.render();
     return c;
   }
 
   render(): void {
-    const vals = this.params.map((p) => p.value.ref);
-    const renderables = this._callRender(vals, null);
+    const obj: Record<string, any> = {};
+    for (const p of this.params) obj[p.name] = p.value.ref;
+    const renderables = this.renderFn(obj);
     if (!renderables) return;
 
     const ids = new Set(Object.keys(renderables));
