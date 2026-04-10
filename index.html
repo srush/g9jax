@@ -98,21 +98,48 @@
       height: 100%;
     }
     .demo-code {
-      padding: 1rem 1.25rem;
-      overflow-x: auto;
+      position: relative;
       background: #1e1e2e;
+    }
+    .demo-code textarea {
+      display: block;
+      width: 100%;
+      min-height: 160px;
+      padding: 1rem 1.25rem;
+      background: transparent;
       color: #cdd6f4;
       font-family: var(--mono);
       font-size: 0.82rem;
       line-height: 1.65;
-      max-height: 320px;
-      overflow-y: auto;
+      border: none;
+      outline: none;
+      resize: vertical;
+      tab-size: 2;
     }
-    .demo-code .kw { color: #cba6f7; }
-    .demo-code .fn { color: #89b4fa; }
-    .demo-code .str { color: #a6e3a1; }
-    .demo-code .num { color: #fab387; }
-    .demo-code .cmt { color: #6c7086; font-style: italic; }
+    .demo-code .run-btn {
+      position: absolute;
+      top: 0.5rem;
+      right: 0.5rem;
+      padding: 0.25rem 0.75rem;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      font-family: var(--font);
+      font-size: 0.75rem;
+      font-weight: 600;
+      cursor: pointer;
+      opacity: 0.85;
+      transition: opacity 0.15s;
+    }
+    .demo-code .run-btn:hover { opacity: 1; }
+    .demo-code .error-msg {
+      padding: 0.5rem 1.25rem;
+      color: #f87171;
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      white-space: pre-wrap;
+    }
 
     #loading-banner {
       text-align: center;
@@ -173,16 +200,17 @@
     <p class="desc">Two points: one at (x, y) and one at (y, x). Drag one and the other mirrors it.</p>
     <div class="demo-card">
       <div class="demo-canvas" id="demo-points"></div>
-      <div class="demo-code"><pre><span class="kw">const</span> FLIP = np.<span class="fn">array</span>([[<span class="num">0</span>,<span class="num">1</span>],[<span class="num">1</span>,<span class="num">0</span>]]);
+      <div class="demo-code" data-target="#demo-points">
+        <textarea>const FLIP = np.array([[0,1],[1,0]], {dtype: np.float64});
 
-<span class="kw">const</span> render = <span class="fn">g9</span>(<span class="kw">function</span> (params) {
-  <span class="kw">const</span> xy = params.xy;
-  <span class="kw">const</span> p2 = np.<span class="fn">dot</span>(FLIP.ref, xy.ref);
-  <span class="kw">return</span> {
-    p1: <span class="fn">point</span>(xy),
-    p2: <span class="fn">point</span>(p2),
-  };
-}, { xy: [<span class="num">40</span>, <span class="num">0</span>] });</pre></div>
+return new G9((params) => {
+  const xy = params.xy;
+  const p2 = np.dot(FLIP.ref, xy.ref);
+  return { p1: point(xy), p2: point(p2) };
+}, { xy: [40, 0] });</textarea>
+        <button class="run-btn">Run ▶</button>
+        <div class="error-msg"></div>
+      </div>
     </div>
   </div>
 
@@ -192,20 +220,35 @@
     <p class="desc">Points arranged in two concentric circles using trigonometry. All controlled by radius and angle parameters.</p>
     <div class="demo-card">
       <div class="demo-canvas" id="demo-rings"></div>
-      <div class="demo-code"><pre><span class="kw">const</span> OFFSETS = np.<span class="fn">array</span>([<span class="num">0</span>, .785, <span class="num">1.571</span>, ...], { dtype: np.float64 });
+      <div class="demo-code" data-target="#demo-rings">
+        <textarea>const SIDES = 8;
+const offsets = [];
+for (let i = 0; i < SIDES; i++)
+  offsets.push((i / SIDES) * Math.PI * 2);
+const OFFSETS = np.array(offsets, {dtype: np.float64});
 
-<span class="kw">const</span> ringPt = (offset, angle, radius) =&gt; {
-  <span class="kw">const</span> a = angle.<span class="fn">add</span>(offset);
-  <span class="kw">return</span> np.<span class="fn">concatenate</span>([np.<span class="fn">cos</span>(a.ref).<span class="fn">mul</span>(radius.ref),
-                        np.<span class="fn">sin</span>(a).<span class="fn">mul</span>(radius)]);
+const outerPt = (offset, angle, radius) => {
+  const a = angle.add(offset);
+  return np.concatenate([
+    np.cos(a.ref).mul(radius.ref),
+    np.sin(a).mul(radius)]);
 };
-<span class="kw">const</span> vmapRing = <span class="fn">vmap</span>(ringPt, [<span class="num">0</span>, <span class="kw">null</span>, <span class="kw">null</span>]);
+const vmapOuter = vmap(outerPt, [0, null, null]);
 
-<span class="kw">const</span> rings = <span class="fn">g9</span>(<span class="kw">function</span> (params) {
-  <span class="kw">const</span> outer = <span class="fn">vmapRing</span>(OFFSETS, params.angle, params.radius);
-  <span class="cmt">// outer is [SIDES, 2] — unpack into point()s</span>
-  <span class="cmt">// ...</span>
-}, { radius: [<span class="num">120</span>], angle: [<span class="num">0</span>] });</pre></div>
+return new G9((params) => {
+  const flat = vmapOuter(
+    OFFSETS.ref, params.angle.ref, params.radius
+  ).reshape([SIDES * 2]);
+  const pts = {};
+  for (let i = 0; i < SIDES; i++)
+    pts["p"+i] = point(
+      (i < SIDES-1 ? flat.ref : flat)
+        .slice([i*2, i*2+2]));
+  return pts;
+}, { radius: [120], angle: [0] });</textarea>
+        <button class="run-btn">Run ▶</button>
+        <div class="error-msg"></div>
+      </div>
     </div>
   </div>
 
@@ -215,18 +258,23 @@
     <p class="desc">Three lines with different <code>affects</code> constraints controlling which endpoints can move.</p>
     <div class="demo-card">
       <div class="demo-canvas" id="demo-lines"></div>
-      <div class="demo-code"><pre><span class="kw">const</span> lines = <span class="fn">g9</span>(<span class="kw">function</span> (params) {
-  <span class="kw">const</span> opts = { <span class="str">"stroke-width"</span>: <span class="num">8</span> };
-  <span class="kw">return</span> {
-    l1: <span class="fn">line</span>(params.line1, { stroke: <span class="str">'black'</span>, ...opts }),
-    l2: <span class="fn">line</span>(params.line2, { stroke: <span class="str">'#e11d48'</span>,
-         affects: { line2: [<span class="num">1</span>,<span class="num">1</span>,<span class="num">0</span>,<span class="num">0</span>] }, ...opts }),
-    l3: <span class="fn">line</span>(params.line3, { stroke: <span class="str">'#2563eb'</span>,
-         affects: { line3: [<span class="num">1</span>,<span class="num">0</span>,<span class="num">0</span>,<span class="num">1</span>] }, ...opts }),
-  };
-}, { line1: [-<span class="num">100</span>,-<span class="num">50</span>,<span class="num">100</span>,-<span class="num">50</span>],
-     line2: [-<span class="num">100</span>,<span class="num">0</span>,<span class="num">100</span>,<span class="num">0</span>],
-     line3: [-<span class="num">100</span>,<span class="num">50</span>,<span class="num">100</span>,<span class="num">50</span>] });</pre></div>
+      <div class="demo-code" data-target="#demo-lines">
+        <textarea>const opts = {"stroke-width": 8, "stroke-linecap": "round"};
+
+return new G9((params) => ({
+  l1: line(params.line1, {stroke: "#1c1917", ...opts}),
+  l2: line(params.line2, {stroke: "#e11d48",
+       affects: {line2: [1,1,0,0]}, ...opts}),
+  l3: line(params.line3, {stroke: "#2563eb",
+       affects: {line3: [1,0,0,1]}, ...opts}),
+}), {
+  line1: [-100,-50,100,-50],
+  line2: [-100,0,100,0],
+  line3: [-100,50,100,50],
+});</textarea>
+        <button class="run-btn">Run ▶</button>
+        <div class="error-msg"></div>
+      </div>
     </div>
   </div>
 
@@ -236,27 +284,34 @@
     <p class="desc">A recursive dragon curve. Drag the endpoints or the curve to change its squareness.</p>
     <div class="demo-card">
       <div class="demo-canvas" id="demo-dragon"></div>
-      <div class="demo-code"><pre><span class="kw">const</span> ROT = np.<span class="fn">array</span>([[<span class="num">0</span>,<span class="num">1</span>],[<span class="num">-1</span>,<span class="num">0</span>]]);
+      <div class="demo-code" data-target="#demo-dragon">
+        <textarea>const ROT = np.array([[0,1],[-1,0]], {dtype: np.float64});
+const lineOpts = {"stroke-width": 3, "stroke-linecap": "round",
+  affects: {squareness: true}};
 
-<span class="kw">const</span> dragon = <span class="fn">g9</span>(<span class="kw">function</span> (params) {
-  <span class="kw">const</span> points = {};
-  <span class="kw">function</span> <span class="fn">curve</span>(from, to, dir, level, name) {
-    <span class="kw">if</span> (level === <span class="num">0</span>) {
-      points[<span class="str">"ln"</span>+name] = <span class="fn">line</span>(np.<span class="fn">concatenate</span>([from,to]));
-    } <span class="kw">else</span> {
-      <span class="kw">const</span> mid = from.ref.<span class="fn">add</span>(to.ref)
-        .<span class="fn">add</span>(np.<span class="fn">dot</span>(ROT.ref,to.ref.<span class="fn">sub</span>(from.ref))
-        .<span class="fn">mul</span>(params.squareness.ref).<span class="fn">mul</span>(dir))
-        .<span class="fn">div</span>(<span class="num">2</span>);
-      <span class="fn">curve</span>(from, mid.ref, <span class="num">-1</span>, level-<span class="num">1</span>, name+<span class="str">"l"</span>);
-      <span class="fn">curve</span>(mid, to, <span class="num">1</span>, level-<span class="num">1</span>, name+<span class="str">"r"</span>);
+return new G9((params) => {
+  const pts = {};
+  function curve(from, to, dir, level, name) {
+    if (level === 0) {
+      pts["ln"+name] = line(np.concatenate([from,to]), lineOpts);
+    } else {
+      const diff = to.ref.sub(from.ref);
+      const mid = from.ref.add(to.ref)
+        .add(np.dot(ROT.ref, diff)
+          .mul(params.squareness.ref).mul(dir))
+        .div(2);
+      curve(from, mid.ref, -1, level-1, name+"l");
+      curve(mid, to, 1, level-1, name+"r");
     }
   }
-  <span class="fn">curve</span>(params.fromPt.ref, params.toPt.ref, <span class="num">-1</span>, <span class="num">5</span>, <span class="str">""</span>);
-  points.from = <span class="fn">point</span>(params.fromPt.ref);
-  points.to = <span class="fn">point</span>(params.toPt.ref);
-  <span class="kw">return</span> points;
-}, { fromPt:[<span class="num">175</span>,<span class="num">96</span>], toPt:[-<span class="num">175</span>,<span class="num">39</span>], squareness:[<span class="num">0.8</span>] });</pre></div>
+  curve(params.fromPt.ref, params.toPt.ref, -1, 5, "");
+  pts.from = point(params.fromPt.ref, {fill:"#0ea5e9", r:6});
+  pts.to = point(params.toPt.ref, {fill:"#0ea5e9", r:6});
+  return pts;
+}, {fromPt:[175,96], toPt:[-175,39], squareness:[0.8]});</textarea>
+        <button class="run-btn">Run ▶</button>
+        <div class="error-msg"></div>
+      </div>
     </div>
   </div>
 
@@ -266,26 +321,38 @@
     <p class="desc">A recursive tree. Drag branches to change the split angle and attenuation.</p>
     <div class="demo-card">
       <div class="demo-canvas" id="demo-tree"></div>
-      <div class="demo-code"><pre><span class="kw">const</span> tree = <span class="fn">g9</span>(<span class="kw">function</span> (params) {
-  <span class="kw">const</span> points = {};
-  <span class="kw">function</span> <span class="fn">branch</span>(pt, len, angle, n, name) {
-    <span class="kw">const</span> rad = angle.ref.<span class="fn">mul</span>(Math.PI / <span class="num">180</span>);
-    <span class="kw">const</span> dir = np.<span class="fn">concatenate</span>([np.<span class="fn">cos</span>(rad.ref), np.<span class="fn">sin</span>(rad)]);
-    <span class="kw">const</span> tip = pt.ref.<span class="fn">add</span>(dir.<span class="fn">mul</span>(len.ref));
-    points[<span class="str">"pt"</span>+name] = <span class="fn">point</span>(tip.ref, {fill:<span class="str">"#22c55e"</span>});
-    points[<span class="str">"ln"</span>+name] = <span class="fn">line</span>(np.<span class="fn">concatenate</span>([pt, tip.ref]),
-      { affects: {deltaAngle:<span class="kw">true</span>, attenuation:<span class="kw">true</span>} });
-    <span class="kw">if</span> (n > <span class="num">0</span>) {
-      <span class="fn">branch</span>(tip.ref, len.ref.<span class="fn">mul</span>(params.attenuation.ref),
-        angle.ref.<span class="fn">add</span>(params.deltaAngle.ref), n-<span class="num">1</span>, name+<span class="str">"l"</span>);
-      <span class="fn">branch</span>(tip, len.<span class="fn">mul</span>(params.attenuation.ref),
-        angle.<span class="fn">sub</span>(params.deltaAngle.ref), n-<span class="num">1</span>, name+<span class="str">"r"</span>);
+      <div class="demo-code" data-target="#demo-tree">
+        <textarea>return new G9((params) => {
+  const pts = {};
+  const PI_180 = Math.PI / 180;
+  function branch(base, len, angle, depth, name) {
+    const rad = angle.ref.mul(PI_180);
+    const dir = np.concatenate([np.cos(rad.ref), np.sin(rad)]);
+    const tip = base.ref.add(dir.mul(len.ref));
+    pts["pt"+name] = point(tip.ref, {fill:"#22c55e", r:3});
+    pts["ln"+name] = line(np.concatenate([base, tip.ref]), {
+      stroke: depth > 3 ? "#8B4513" : "#22c55e",
+      "stroke-width": Math.max(1, depth*0.7+1),
+      "stroke-linecap": "round",
+      affects: {deltaAngle: true, attenuation: true},
+    });
+    if (depth > 0) {
+      branch(tip.ref, len.ref.mul(params.attenuation.ref),
+        angle.ref.add(params.deltaAngle.ref), depth-1, name+"l");
+      branch(tip, len.mul(params.attenuation.ref),
+        angle.sub(params.deltaAngle.ref), depth-1, name+"r");
     }
   }
-  <span class="fn">branch</span>(np.<span class="fn">array</span>([<span class="num">0</span>,<span class="num">120</span>]), params.startLength.ref,
-    np.<span class="fn">array</span>([<span class="num">-90</span>]), <span class="num">4</span>, <span class="str">""</span>);
-  <span class="kw">return</span> points;
-}, { deltaAngle:[<span class="num">33</span>], startLength:[<span class="num">65</span>], attenuation:[<span class="num">0.7</span>] });</pre></div>
+  branch(np.array([0,120], {dtype:np.float64}),
+    params.startLength.ref,
+    np.array([-90], {dtype:np.float64}), 4, "");
+  pts.root = point(np.array([0,120], {dtype:np.float64}),
+    {fill:"#8B4513", r:5, affects:{startLength:true}});
+  return pts;
+}, {deltaAngle:[33], startLength:[65], attenuation:[0.7]});</textarea>
+        <button class="run-btn">Run ▶</button>
+        <div class="error-msg"></div>
+      </div>
     </div>
   </div>
 
@@ -298,5 +365,48 @@
 </footer>
 
 <script type="module" src="/src/main.ts"></script>
+<script type="module">
+import { G9, point, line, np, jit } from "/src/g9.ts";
+import { vmap } from "@jax-js/jax";
+
+function runDemo(codeEl) {
+  const textarea = codeEl.querySelector("textarea");
+  const errorDiv = codeEl.querySelector(".error-msg");
+  const target = codeEl.dataset.target;
+  const canvas = document.querySelector(target);
+  if (!textarea || !canvas) return;
+
+  errorDiv.textContent = "";
+  try {
+    const fn = new Function("G9","point","line","np","jit","vmap", textarea.value);
+    const g9 = fn(G9, point, line, np, jit, vmap);
+    if (g9 instanceof G9) {
+      g9.align("center", "center").insertInto(target);
+    }
+  } catch (e) {
+    errorDiv.textContent = e.message;
+  }
+}
+
+document.querySelectorAll(".demo-code .run-btn").forEach((btn) => {
+  btn.addEventListener("click", () => runDemo(btn.closest(".demo-code")));
+});
+
+document.querySelectorAll(".demo-code textarea").forEach((ta) => {
+  ta.addEventListener("keydown", (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+      e.preventDefault();
+      runDemo(ta.closest(".demo-code"));
+    }
+    if (e.key === "Tab") {
+      e.preventDefault();
+      const start = ta.selectionStart;
+      const end = ta.selectionEnd;
+      ta.value = ta.value.substring(0, start) + "  " + ta.value.substring(end);
+      ta.selectionStart = ta.selectionEnd = start + 2;
+    }
+  });
+});
+</script>
 </body>
 </html>
