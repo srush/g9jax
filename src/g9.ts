@@ -2,7 +2,7 @@ import { numpy as np, jit, jacfwd } from "@jax-js/jax";
 
 type ShapeArgs = { type: "point" | "line"; c: any } & Record<string, any>;
 type ParamState = { name: string; value: any };
-type LossFn = (...values: any[]) => any;
+type LossFn = (target: any, ...values: any[]) => any;
 type RenderFn = (
   params: Record<string, any>,
   targetId: string | null,
@@ -104,18 +104,13 @@ function buildAffectsMask(
   return mask;
 }
 
-export function minimize(
-  params: ParamState[],
+type CachedJit = { jitLoss: any; jitGrad: any };
+
+function buildFlatLoss(
+  sizes: number[],
   lossFn: LossFn,
-  affects: Record<string, any> | null | undefined,
-  maxIter = 30,
-): void {
-  const sizes = params.map((p) => p.value.shape[0]);
-  const dim = sizes.reduce((a, b) => a + b, 0);
-  if (dim === 0) return;
-  const mask = buildAffectsMask(params, affects);
-  let x = readVec(params);
-  const flatLoss = (flat: any) => {
+): (target: any, flat: any) => any {
+  return (target: any, flat: any) => {
     const args: any[] = [];
     let off = 0;
     for (let i = 0; i < sizes.length; i++) {
@@ -124,15 +119,41 @@ export function minimize(
       args.push(isLast ? flat.slice([off, off + n]) : flat.ref.slice([off, off + n]));
       off += n;
     }
-    return lossFn(...args);
+    return lossFn(target, ...args);
   };
-  const jitLoss = jit(flatLoss);
-  const jitGrad = jit(jacfwd(flatLoss));
+}
+
+export function minimize(
+  params: ParamState[],
+  lossFn: LossFn,
+  target: number[],
+  affects: Record<string, any> | null | undefined,
+  maxIter = 30,
+  cached?: CachedJit,
+): CachedJit {
+  const sizes = params.map((p) => p.value.shape[0]);
+  const dim = sizes.reduce((a, b) => a + b, 0);
+  if (dim === 0) return cached ?? { jitLoss: null, jitGrad: null };
+  const mask = buildAffectsMask(params, affects);
+  let x = readVec(params);
+
+  let jitLoss: any, jitGrad: any;
+  if (cached) {
+    jitLoss = cached.jitLoss;
+    jitGrad = cached.jitGrad;
+  } else {
+    const flatLoss = buildFlatLoss(sizes, lossFn);
+    jitLoss = jit(flatLoss);
+    const gradOfFlat = (target: any, flat: any) => jacfwd((f: any) => flatLoss(target, f))(flat);
+    jitGrad = jit(gradOfFlat);
+  }
+
+  const targetArr = np.array(target, { dtype: np.float64 });
 
   for (let it = 0; it < maxIter; it++) {
     const xArr = np.array(x, { dtype: np.float64 });
-    const f0 = toJS(jitLoss(xArr.ref));
-    const g = toJSArr(jitGrad(xArr));
+    const f0 = toJS(jitLoss(targetArr.ref, xArr.ref));
+    const g = toJSArr(jitGrad(targetArr.ref, xArr));
     for (let i = 0; i < dim; i++) g[i] *= mask[i];
 
     let gnorm2 = 0;
@@ -149,7 +170,7 @@ export function minimize(
     for (let ls = 0; ls < 20; ls++) {
       const xn = x0.map((v, i) => v - lr * g[i]);
       const xnArr = np.array(xn, { dtype: np.float64 });
-      const f1 = toJS(jitLoss(xnArr));
+      const f1 = toJS(jitLoss(targetArr.ref, xnArr));
       if (f1 < f0 - 1e-4 * lr * gnorm2) {
         x = xn;
         improved = true;
@@ -161,9 +182,8 @@ export function minimize(
     if (!improved) break;
   }
 
-  jitLoss.dispose();
-  jitGrad.dispose();
   writeVec(params, x);
+  return { jitLoss, jitGrad };
 }
 
 // ---------------------------------------------------------------------------
@@ -183,8 +203,10 @@ class PointEl {
     doMinimize: (
       id: string,
       lossFn: LossFn,
+      target: number[],
       affects: Record<string, any> | null | undefined,
-    ) => void,
+      cached?: CachedJit,
+    ) => CachedJit,
     g9: G9,
   ): void {
     this.container = container;
@@ -195,21 +217,16 @@ class PointEl {
 
     addDrag(this.el, (_evt) => {
       const c0 = this._cachedCoords;
+      const lossFn: LossFn = (target, ...pv) => {
+        const shapes = g9._callRender(pv, id);
+        if (!shapes?.[id]) return np.array([0], { dtype: np.float64 });
+        const c = shapes[id].c;
+        const d = c.sub(target);
+        return d.ref.mul(d).sum();
+      };
+      let cached: CachedJit | undefined;
       return (dx, dy) => {
-        const tx = c0[0] + dx;
-        const ty = c0[1] + dy;
-        doMinimize(
-          id,
-          (...pv) => {
-            const shapes = g9._callRender(pv, id);
-            if (!shapes?.[id]) return np.array([0], { dtype: np.float64 });
-            const c = shapes[id].c;
-            const target = np.array([tx, ty], { dtype: np.float64 });
-            const d = c.sub(target);
-            return d.ref.mul(d).sum();
-          },
-          this.args.affects,
-        );
+        cached = doMinimize(id, lossFn, [c0[0] + dx, c0[1] + dy], this.args.affects, cached);
       };
     });
   }
@@ -243,8 +260,10 @@ class LineEl {
     doMinimize: (
       id: string,
       lossFn: LossFn,
+      target: number[],
       affects: Record<string, any> | null | undefined,
-    ) => void,
+      cached?: CachedJit,
+    ) => CachedJit,
     g9: G9,
   ): void {
     this.container = container;
@@ -263,24 +282,20 @@ class LineEl {
       const ll = Math.sqrt(ldx * ldx + ldy * ldy) || 1;
       const r = Math.sqrt(pdx * pdx + pdy * pdy) / ll;
 
+      const lossFn: LossFn = (target, ...pv) => {
+        const shapes = g9._callRender(pv, id);
+        if (!shapes?.[id]) return np.array([0], { dtype: np.float64 });
+        const cv = shapes[id].c;
+        const fromPt = cv.ref.slice([0, 2]);
+        const toPt = cv.slice([2, 4]);
+        const dir = toPt.sub(fromPt.ref);
+        const predicted = fromPt.add(dir.mul(r));
+        const d = predicted.sub(target);
+        return d.ref.mul(d).sum();
+      };
+      let cached: CachedJit | undefined;
       return (dx, dy) => {
-        const tx = cx + dx, ty = cy + dy;
-        doMinimize(
-          id,
-          (...pv) => {
-            const shapes = g9._callRender(pv, id);
-            if (!shapes?.[id]) return np.array([0], { dtype: np.float64 });
-            const cv = shapes[id].c;
-            const fromPt = cv.ref.slice([0, 2]);
-            const toPt = cv.slice([2, 4]);
-            const dir = toPt.sub(fromPt.ref);
-            const predicted = fromPt.add(dir.mul(r));
-            const target = np.array([tx, ty], { dtype: np.float64 });
-            const d = predicted.sub(target);
-            return d.ref.mul(d).sum();
-          },
-          this.args.affects,
-        );
+        cached = doMinimize(id, lossFn, [cx + dx, cy + dy], this.args.affects, cached);
       };
     });
   }
@@ -432,10 +447,13 @@ export class G9 {
   _minimize(
     id: string,
     lossFn: LossFn,
+    target: number[],
     affects: Record<string, any> | null | undefined,
-  ): void {
-    minimize(this.params, lossFn, affects, 30);
+    cached?: CachedJit,
+  ): CachedJit {
+    const c = minimize(this.params, lossFn, target, affects, 30, cached);
     this.render();
+    return c;
   }
 
   render(): void {

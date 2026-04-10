@@ -33,10 +33,6 @@ function toList(x: any): number[] {
   return [Number(x)];
 }
 
-function makeTarget(coords: number[]): any {
-  return np.array(coords, { dtype: np.float64 });
-}
-
 class FakeElement {
   style: Record<string, string> = {};
   children: FakeElement[] = [];
@@ -98,14 +94,13 @@ run("point drag loss minimizes", () => {
     return { p1: point(xy), p2: point(p2) };
   };
 
-  const lossFn = (xy: any) => {
+  const lossFn = (target: any, xy: any) => {
     const shapes = render(xy);
-    const target = makeTarget([50, 10]);
     const delta = shapes.p1.c.sub(target);
     return delta.ref.mul(delta).sum();
   };
 
-  minimize(params, lossFn, null, 5);
+  minimize(params, lossFn, [50, 10], null, 5);
   const xy = toList(params[0].value);
   assert(Number.isFinite(xy[0]) && Number.isFinite(xy[1]), "point params should remain finite");
 });
@@ -138,15 +133,14 @@ run("basic example survives repeated G9 minimize/render cycles", () => {
 
   g9.align("center", "center").insertInto(host as any);
 
-  const lossFn = (...pv: any[]) => {
+  const lossFn = (target: any, ...pv: any[]) => {
     const shapes = (g9 as any)._callRender(pv, "p1");
-    const target = makeTarget([50, 10]);
     const delta = shapes.p1.c.sub(target);
     return delta.ref.mul(delta).sum();
   };
 
   for (let i = 0; i < 4; i++) {
-    minimize((g9 as any).params, lossFn, null, 3);
+    minimize((g9 as any).params, lossFn, [50, 10], null, 3);
     g9.render();
   }
 
@@ -191,21 +185,18 @@ run("line drag loss minimizes", () => {
     { name: "line1", value: np.array([-100, -50, 100, -50], { dtype: np.float64 }) },
   ];
 
-  const render = (line1: any) => ({ l1: line(line1) });
-
-  const lossFn = (line1: any) => {
-    const shapes = render(line1);
+  const lossFn = (target: any, line1: any) => {
+    const shapes = { l1: line(line1) };
     const coords = shapes.l1.c;
     const fromPt = coords.ref.slice([0, 2]);
     const toPt = coords.slice([2, 4]);
     const dir = toPt.sub(fromPt.ref);
     const predicted = fromPt.add(dir.mul(0.5));
-    const target = makeTarget([0, -40]);
     const delta = predicted.sub(target);
     return delta.ref.mul(delta).sum();
   };
 
-  minimize(params, lossFn, null, 5);
+  minimize(params, lossFn, [0, -40], null, 5);
   const coords = toList(params[0].value);
   assert(coords.length === 4, "line coords should stay 4D");
   assert(coords.every(Number.isFinite), "line coords should remain finite");
@@ -240,14 +231,13 @@ run("dragon render survives optimization path", () => {
     return shapes;
   };
 
-  const lossFn = (fromPt: any, toPt: any, squareness: any) => {
+  const lossFn = (target: any, fromPt: any, toPt: any, squareness: any) => {
     const shapes = render(fromPt, toPt, squareness);
-    const target = makeTarget([100, 50]);
     const delta = shapes.from.c.sub(target);
     return delta.ref.mul(delta).sum();
   };
 
-  minimize(params, lossFn, null, 3);
+  minimize(params, lossFn, [100, 50], null, 3);
   assert(toList(params[0].value).every(Number.isFinite), "dragon fromPt should remain finite");
   assert(toList(params[1].value).every(Number.isFinite), "dragon toPt should remain finite");
   assert(toList(params[2].value).every(Number.isFinite), "dragon squareness should remain finite");
@@ -292,14 +282,13 @@ run("tree render survives optimization path", () => {
     return shapes;
   };
 
-  const lossFn = (deltaAngle: any, startLength: any, attenuation: any) => {
+  const lossFn = (target: any, deltaAngle: any, startLength: any, attenuation: any) => {
     const shapes = render(deltaAngle, startLength, attenuation);
-    const target = makeTarget([0, 120]);
     const delta = shapes.root.c.sub(target);
     return delta.ref.mul(delta).sum();
   };
 
-  minimize(params, lossFn, null, 3);
+  minimize(params, lossFn, [0, 120], null, 3);
   assert(toList(params[0].value).every(Number.isFinite), "tree deltaAngle should remain finite");
   assert(toList(params[1].value).every(Number.isFinite), "tree startLength should remain finite");
   assert(toList(params[2].value).every(Number.isFinite), "tree attenuation should remain finite");
