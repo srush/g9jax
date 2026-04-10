@@ -1,5 +1,5 @@
 import { numpy as np } from "@jax-js/jax";
-import { minimize, point, line } from "./src/g9";
+import { G9, minimize, point, line } from "./src/g9";
 
 if (typeof (globalThis as { Float16Array?: typeof Float32Array }).Float16Array === "undefined") {
   (globalThis as { Float16Array: typeof Float32Array }).Float16Array = Float32Array;
@@ -37,6 +37,56 @@ function makeTarget(coords: number[]): any {
   return np.array(coords, { dtype: np.float64 });
 }
 
+class FakeElement {
+  style: Record<string, string> = {};
+  children: FakeElement[] = [];
+  textContent = "";
+  attrs: Record<string, string> = {};
+
+  appendChild(child: FakeElement): FakeElement {
+    this.children.push(child);
+    return child;
+  }
+
+  removeChild(child: FakeElement): FakeElement {
+    const idx = this.children.indexOf(child);
+    if (idx >= 0) this.children.splice(idx, 1);
+    return child;
+  }
+
+  setAttributeNS(_ns: string | null, key: string, value: string): void {
+    this.attrs[key] = value;
+  }
+
+  setAttribute(key: string, value: string): void {
+    this.attrs[key] = value;
+  }
+
+  addEventListener(): void {}
+  removeEventListener(): void {}
+
+  getBoundingClientRect() {
+    return { top: 0, left: 0, width: 800, height: 600 };
+  }
+}
+
+function installFakeDom(): FakeElement {
+  const host = new FakeElement();
+  const documentStub = {
+    createElementNS: () => new FakeElement(),
+    querySelector: () => host,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  };
+  const windowStub = {
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  };
+  (globalThis as any).document = documentStub;
+  (globalThis as any).window = windowStub;
+  return host;
+}
+
 run("point drag loss minimizes", () => {
   const params: ParamState[] = [
     { name: "xy", value: np.array([40, 0], { dtype: np.float64 }) },
@@ -58,6 +108,82 @@ run("point drag loss minimizes", () => {
   minimize(params, lossFn, null, 5);
   const xy = toList(params[0].value);
   assert(Number.isFinite(xy[0]) && Number.isFinite(xy[1]), "point params should remain finite");
+});
+
+run("basic example render path works exactly as in main.ts", () => {
+  const xy = np.array([40, 0], { dtype: np.float64 });
+  const render = (params: { xy: any }) => {
+    const value = params.xy;
+    const flip = np.array([[0, 1], [1, 0]], { dtype: np.float64 });
+    const p2 = np.dot(flip, value.ref);
+    return { p1: point(value), p2: point(p2) };
+  };
+
+  const shapes = render({ xy: xy.ref });
+  assert(toList(shapes.p1.c).length === 2, "basic example p1 should be 2D");
+  assert(toList(shapes.p2.c).length === 2, "basic example p2 should be 2D");
+});
+
+run("basic example survives repeated G9 minimize/render cycles", () => {
+  const host = installFakeDom();
+  const g9 = new G9(
+    (params: Record<string, any>) => {
+      const xy = params.xy;
+      const flip = np.array([[0, 1], [1, 0]], { dtype: np.float64 });
+      const p2 = np.dot(flip, xy.ref);
+      return { p1: point(xy), p2: point(p2) };
+    },
+    { xy: [40, 0] },
+  );
+
+  g9.align("center", "center").insertInto(host as any);
+
+  const lossFn = (...pv: any[]) => {
+    const shapes = (g9 as any)._callRender(pv, "p1");
+    const target = makeTarget([50, 10]);
+    const delta = shapes.p1.c.sub(target);
+    return delta.ref.mul(delta).sum();
+  };
+
+  for (let i = 0; i < 4; i++) {
+    minimize((g9 as any).params, lossFn, null, 3);
+    g9.render();
+  }
+
+  const xy = toList((g9 as any).params[0].value);
+  assert(Number.isFinite(xy[0]) && Number.isFinite(xy[1]), "basic G9 params should remain finite");
+});
+
+run("rings example render path works exactly as in main.ts", () => {
+  const SIDES = 8;
+  const angleOffsets: number[] = [];
+  for (let i = 0; i < SIDES; i++) angleOffsets.push((i / SIDES) * Math.PI * 2);
+
+  const radius = np.array([120], { dtype: np.float64 });
+  const angle = np.array([0], { dtype: np.float64 });
+  const render = (params: { radius: any; angle: any }) => {
+    const pts: Record<string, any> = {};
+    for (let i = 0; i < SIDES; i++) {
+      const offset = np.array([angleOffsets[i]], { dtype: np.float64 });
+      const a = params.angle.ref.add(offset);
+
+      const ox = np.cos(a.ref).mul(params.radius.ref);
+      const oy = np.sin(a.ref).mul(params.radius.ref);
+      pts[`out${i}`] = point(np.concatenate([ox, oy]));
+
+      const negA = a.neg();
+      const halfR = params.radius.ref.div(2);
+      const ix = np.cos(negA.ref).mul(halfR.ref);
+      const iy = np.sin(negA).mul(halfR);
+      pts[`in${i}`] = point(np.concatenate([ix, iy]), { fill: "#e11d48" });
+    }
+    return pts;
+  };
+
+  const shapes = render({ radius: radius.ref, angle: angle.ref });
+  assert(Object.keys(shapes).length === 16, "rings example should render 16 points");
+  assert(toList(shapes.out0.c).length === 2, "rings outer point should be 2D");
+  assert(toList(shapes.in0.c).length === 2, "rings inner point should be 2D");
 });
 
 run("line drag loss minimizes", () => {
