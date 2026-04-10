@@ -112,6 +112,16 @@ function writeVec(params: ParamState[], x: number[]): void {
   }
 }
 
+function buildEvalArrays(params: ParamState[], x: number[]): any[] {
+  let off = 0;
+  return params.map((p) => {
+    const n = p.value.shape[0];
+    const arr = np.array(x.slice(off, off + n), { dtype: np.float64 });
+    off += n;
+    return arr;
+  });
+}
+
 function buildAffectsMask(
   params: ParamState[],
   affects: Record<string, any> | null | undefined,
@@ -147,35 +157,41 @@ export function minimize(
   const dim = params.reduce((s, p) => s + p.value.shape[0], 0);
   if (dim === 0) return;
   const mask = buildAffectsMask(params, affects);
+  let x = readVec(params);
 
-  function evalLoss() {
-    const loss = lossFn(...params.map((p) => p.value.ref));
-    return toJS(loss);
+  function evalLossAt(values: number[]) {
+    const arrays = buildEvalArrays(params, values);
+    const loss = lossFn(...arrays.map((arr) => arr.ref));
+    const out = toJS(loss);
+    arrays.forEach((arr) => arr.dispose?.());
+    return out;
   }
 
-  function evalGrad() {
-    const g = forwardGrad(lossFn, params.map((p) => p.value));
+  function evalGradAt(values: number[]) {
+    const arrays = buildEvalArrays(params, values);
+    const g = forwardGrad(lossFn, arrays);
+    arrays.forEach((arr) => arr.dispose?.());
     for (let i = 0; i < dim; i++) g[i] *= mask[i];
     return g;
   }
 
   for (let it = 0; it < maxIter; it++) {
-    const f0 = evalLoss();
-    const g = evalGrad();
+    const f0 = evalLossAt(x);
+    const g = evalGradAt(x);
 
     let gnorm2 = 0;
     for (let i = 0; i < dim; i++) gnorm2 += g[i] * g[i];
     if (gnorm2 < 1e-12) break;
 
-    const x0 = readVec(params);
+    const x0 = x.slice();
     let lr = 1.0;
     let improved = false;
 
     for (let ls = 0; ls < 10; ls++) {
       const xn = x0.map((v, i) => v - lr * g[i]);
-      writeVec(params, xn);
-      const f1 = evalLoss();
+      const f1 = evalLossAt(xn);
       if (f1 < f0 - 1e-4 * lr * gnorm2) {
+        x = xn;
         improved = true;
         break;
       }
@@ -183,10 +199,11 @@ export function minimize(
     }
 
     if (!improved) {
-      writeVec(params, x0);
       break;
     }
   }
+
+  writeVec(params, x);
 }
 
 // ---------------------------------------------------------------------------
