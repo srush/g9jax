@@ -275,10 +275,10 @@ return new G9((params) => {
     <div class="demo-card">
       <div class="demo-canvas" id="demo-lines"></div>
       <div class="demo-code" data-target="#demo-lines">
-        <textarea>const opts = {"stroke-width": 8, "stroke-linecap": "round"};
+        <textarea>const opts = {"stroke-width": 8};
 
 return new G9((params) => ({
-  l1: line(params.line1, {stroke: "#1c1917", ...opts}),
+  l1: line(params.line1, {stroke: "black", ...opts}),
   l2: line(params.line2, {stroke: "#e11d48",
        affects: {line2: [1,1,0,0]}, ...opts}),
   l3: line(params.line3, {stroke: "#2563eb",
