@@ -453,7 +453,7 @@ export class G9 {
     affects: Record<string, any> | null | undefined,
     cached?: CachedJit,
   ): CachedJit {
-    const c = minimize(this.params, this.renderFn, lossFn, target, affects, 3, cached);
+    const c = minimize(this.params, this.renderFn, lossFn, target, affects, 10, cached);
     this.render();
     return c;
   }
