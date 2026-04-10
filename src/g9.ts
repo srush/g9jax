@@ -87,6 +87,15 @@ function readVec(params: ParamState[]): number[] {
   return vals;
 }
 
+function readVecNonDestructive(params: ParamState[]): number[] {
+  const vals: number[] = [];
+  for (const p of params) {
+    const arr = p.value.ref;
+    for (const v of toJSArr(arr)) vals.push(v);
+  }
+  return vals;
+}
+
 function writeVec(params: ParamState[], sizes: number[], x: number[]): void {
   let off = 0;
   for (let i = 0; i < params.length; i++) {
@@ -123,7 +132,7 @@ function buildAffectsMask(
   return mask;
 }
 
-type CachedJit = { jitLoss: any; jitGrad: any; targetLen: number };
+type CachedJit = { jitLoss: any; jitGrad: any; jitRender: any; targetLen: number };
 
 export function minimize(
   params: ParamState[],
@@ -137,19 +146,19 @@ export function minimize(
   const sizes = params.map((p) => p.value.shape[0]);
   const paramNames = params.map((p) => p.name);
   const dim = sizes.reduce((a, b) => a + b, 0);
-  if (dim === 0) return cached ?? { jitLoss: null, jitGrad: null, targetLen: 0 };
+  if (dim === 0) return cached ?? { jitLoss: null, jitGrad: null, jitRender: null, targetLen: 0 };
   const mask = buildAffectsMask(params, sizes, affects);
   let x = readVec(params);
 
   const tLen = target.length;
 
-  let jitLoss: any, jitGrad: any;
+  let jitLoss: any, jitGrad: any, jitRender: any;
   if (cached && cached.targetLen === tLen) {
     jitLoss = cached.jitLoss;
     jitGrad = cached.jitGrad;
+    jitRender = cached.jitRender;
   } else {
-    const combinedFn = (combined: any) => {
-      const t = combined.ref.slice([0, tLen]);
+    const splitParams = (combined: any) => {
       const pv: any[] = [];
       let off = tLen;
       for (let i = 0; i < sizes.length; i++) {
@@ -158,11 +167,28 @@ export function minimize(
         pv.push((isLast ? combined : combined.ref).slice([off, off + n]));
         off += n;
       }
+      return pv;
+    };
+    const combinedFn = (combined: any) => {
+      const t = combined.ref.slice([0, tLen]);
+      const pv = splitParams(combined);
       const coords = renderCoords(renderFn, paramNames, pv);
       return lossFn(t, coords);
     };
+    const renderOnlyFn = (flat: any) => {
+      const pv: any[] = [];
+      let off = 0;
+      for (let i = 0; i < sizes.length; i++) {
+        const n = sizes[i];
+        const isLast = i === sizes.length - 1;
+        pv.push((isLast ? flat : flat.ref).slice([off, off + n]));
+        off += n;
+      }
+      return renderCoords(renderFn, paramNames, pv);
+    };
     jitLoss = jit(combinedFn);
     jitGrad = jit(jacfwd(combinedFn));
+    jitRender = jit(renderOnlyFn);
   }
 
   for (let it = 0; it < maxIter; it++) {
@@ -199,7 +225,7 @@ export function minimize(
   }
 
   writeVec(params, sizes, x);
-  return { jitLoss, jitGrad, targetLen: tLen };
+  return { jitLoss, jitGrad, jitRender, targetLen: tLen };
 }
 
 // ---------------------------------------------------------------------------
@@ -248,11 +274,15 @@ class PointEl {
     this.container.removeChild(this.el);
   }
 
-  update(args: ShapeArgs): void {
-    this.args = args;
-    const c = toJSArr(args.c);
+  updateCoords(c: number[]): void {
     this._cachedCoords = c;
-    const a: Record<string, any> = { cx: c[0], cy: c[1] };
+    this.el.setAttributeNS(null, "cx", String(c[0]));
+    this.el.setAttributeNS(null, "cy", String(c[1]));
+  }
+
+  updateMeta(args: ShapeArgs): void {
+    this.args = args;
+    const a: Record<string, any> = {};
     if (args.fill) a.fill = args.fill;
     if (args.r) a.r = toJS(args.r);
     if (args.stroke) a.stroke = args.stroke;
@@ -316,16 +346,17 @@ class LineEl {
     this.container.removeChild(this.el);
   }
 
-  update(args: ShapeArgs): void {
-    this.args = args;
-    const c = toJSArr(args.c);
+  updateCoords(c: number[]): void {
     this._cachedCoords = c;
-    const a: Record<string, any> = {
-      x1: c[0],
-      y1: c[1],
-      x2: c[2],
-      y2: c[3],
-    };
+    this.el.setAttributeNS(null, "x1", String(c[0]));
+    this.el.setAttributeNS(null, "y1", String(c[1]));
+    this.el.setAttributeNS(null, "x2", String(c[2]));
+    this.el.setAttributeNS(null, "y2", String(c[3]));
+  }
+
+  updateMeta(args: ShapeArgs): void {
+    this.args = args;
+    const a: Record<string, any> = {};
     if (args.stroke) a.stroke = args.stroke;
     if (args["stroke-width"]) a["stroke-width"] = args["stroke-width"];
     if (args["stroke-linecap"]) a["stroke-linecap"] = args["stroke-linecap"];
@@ -454,11 +485,39 @@ export class G9 {
     cached?: CachedJit,
   ): CachedJit {
     const c = minimize(this.params, this.renderFn, lossFn, target, affects, 10, cached);
-    this.render();
+    this._renderFast(c.jitRender);
     return c;
   }
 
-  render(): void {
+  _renderFast(jitRender: any): void {
+    const x = readVecNonDestructive(this.params);
+    const flat = np.array(x, { dtype: np.float64 });
+    const coords: Record<string, any> = jitRender(flat);
+
+    const allArrays: any[] = [];
+    const ids: string[] = [];
+    for (const [id, c] of Object.entries(coords)) {
+      ids.push(id);
+      allArrays.push(c);
+    }
+    if (allArrays.length === 0) return;
+
+    const concatenated = np.concatenate(allArrays);
+    const allCoords: number[] = typeof concatenated?.dataSync === "function"
+      ? Array.from(concatenated.dataSync())
+      : toJSArr(concatenated);
+
+    let off = 0;
+    for (let i = 0; i < ids.length; i++) {
+      const elem = this.elements[ids[i]];
+      if (!elem) continue;
+      const n = elem instanceof LineEl ? 4 : 2;
+      elem.updateCoords(allCoords.slice(off, off + n));
+      off += n;
+    }
+  }
+
+  render(metaOnly = false): void {
     const obj: Record<string, any> = {};
     for (const p of this.params) obj[p.name] = p.value.ref;
     const renderables = this.renderFn(obj);
@@ -471,13 +530,43 @@ export class G9 {
         delete this.elements[k];
       }
     }
-    for (const [id, shape] of Object.entries(renderables)) {
+
+    const entries = Object.entries(renderables);
+    let needMount = false;
+    for (const [id, shape] of entries) {
       if (!this.elements[id]) {
+        needMount = true;
         const elem = shape.type === "line" ? new LineEl() : new PointEl();
         elem.mount(id, this.node, this._minimize.bind(this), this);
         this.elements[id] = elem;
       }
-      this.elements[id].update(shape);
+    }
+
+    if (needMount || metaOnly) {
+      for (const [id, shape] of entries) {
+        this.elements[id].updateMeta(shape);
+      }
+    }
+
+    const coordArrays: any[] = [];
+    const coordIds: string[] = [];
+    for (const [id, shape] of entries) {
+      coordArrays.push(shape.c);
+      coordIds.push(id);
+    }
+
+    if (coordArrays.length > 0) {
+      const flat = np.concatenate(coordArrays);
+      const allCoords: number[] = typeof flat?.dataSync === "function"
+        ? Array.from(flat.dataSync())
+        : toJSArr(flat);
+      let off = 0;
+      for (let i = 0; i < coordIds.length; i++) {
+        const elem = this.elements[coordIds[i]];
+        const n = elem instanceof LineEl ? 4 : 2;
+        elem.updateCoords(allCoords.slice(off, off + n));
+        off += n;
+      }
     }
   }
 }
