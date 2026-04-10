@@ -1,5 +1,5 @@
 import { G9, point, line, np, jit } from "./g9";
-import { defaultDevice, init, vmap } from "@jax-js/jax";
+import { defaultDevice, init, vmap, devices } from "@jax-js/jax";
 
 function show(id: string) {
   const el = document.getElementById(id);
@@ -32,20 +32,29 @@ function runDemoFromTextarea(sectionId: string, canvasSelector: string) {
 async function main() {
   setBanner('<span class="spinner"></span> Initialising jax-js runtime…');
 
+  let backendName = "unknown";
   try {
     const backends = await init();
     console.log("jax-js init complete, backends:", backends);
     defaultDevice("cpu");
+    backendName = defaultDevice().toString();
     console.log("jax-js default device forced to cpu");
   } catch (e: any) {
     console.warn("jax-js full init failed, trying cpu-only:", e.message || e);
     try {
       await init("cpu");
       defaultDevice("cpu");
+      backendName = defaultDevice().toString();
       console.log("jax-js cpu backend ready");
     } catch (e2: any) {
       console.warn("jax-js cpu init also failed:", e2.message || e2);
     }
+  }
+
+  const backendEl = document.getElementById("backend-info");
+  if (backendEl) {
+    const allDevices = devices.map((d: any) => d.toString()).join(", ");
+    backendEl.textContent = `Backend: ${backendName} | Available: ${allDevices}`;
   }
 
   setBanner('<span class="spinner"></span> Rendering demos…');
