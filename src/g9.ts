@@ -83,7 +83,7 @@ function renderCoords(
 
 function readVec(params: ParamState[]): number[] {
   const vals: number[] = [];
-  for (const p of params) for (const v of toJSArr(p.value.ref)) vals.push(v);
+  for (const p of params) for (const v of toJSArr(p.value)) vals.push(v);
   return vals;
 }
 
@@ -556,7 +556,7 @@ export class G9 {
     affects: Record<string, any> | null | undefined,
     cached?: CachedJit,
   ): CachedJit {
-    const c = minimize(this.params, this.renderFn, lossFn, target, affects, 8, cached);
+    const c = minimize(this.params, this.renderFn, lossFn, target, affects, 10, cached);
     this._renderFast(c);
     return c;
   }

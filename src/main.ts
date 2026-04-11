@@ -49,8 +49,9 @@ function runDemoFromCard(card: Element): void {
 function bindRunButtons(): void {
   document.addEventListener("click", (event) => {
     const node = event.target;
-    if (!(node instanceof Element)) return;
-    const button = node.closest(".run-btn");
+    const source = node instanceof Element ? node : node instanceof Node ? node.parentElement : null;
+    if (!source) return;
+    const button = source.closest(".run-btn");
     if (!button) return;
     const card = button.closest(".demo-code");
     if (!card) return;
