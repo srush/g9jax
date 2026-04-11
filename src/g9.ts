@@ -56,6 +56,8 @@ export function line(
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const MOBILE_POINT_RADIUS_SCALE = 1.35;
+const DRAG_ITER_ADAPTIVE = 10;
+const DRAG_ITER_LINE_SEARCH = 18;
 let activeDragCount = 0;
 let dragDebugEnabled = false;
 let lineSearchEnabled = false;
@@ -925,7 +927,8 @@ export class G9 {
     affects: Record<string, any> | null | undefined,
     cached?: CachedJit,
   ): CachedJit {
-    const c = minimize(this.params, this.renderFn, lossFn, target, affects, 8, cached);
+    const dragIterations = lineSearchEnabled ? DRAG_ITER_LINE_SEARCH : DRAG_ITER_ADAPTIVE;
+    const c = minimize(this.params, this.renderFn, lossFn, target, affects, dragIterations, cached);
     this._renderFast(c);
     return c;
   }
