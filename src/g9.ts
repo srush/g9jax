@@ -1,4 +1,4 @@
-import { numpy as np, jit, jacfwd } from "@jax-js/jax";
+import { numpy as np, jit, jacfwd, vmap } from "@jax-js/jax";
 
 type ShapeArgs = { type: "point" | "line"; c: any } & Record<string, any>;
 type ParamState = { name: string; value: any };
@@ -58,6 +58,7 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 const MOBILE_POINT_RADIUS_SCALE = 1.35;
 const DRAG_ITER_ADAPTIVE = 10;
 const DRAG_ITER_LINE_SEARCH = 18;
+const LINE_SEARCH_TRIALS = 12;
 const DRAG_RENDER_EVERY = 2;
 let activeDragCount = 0;
 let dragDebugEnabled = false;
@@ -263,6 +264,7 @@ type CachedJit = {
   jitLoss: any;
   jitGrad: any;
   jitRender: any;
+  jitBatchLoss: any;
   renderIds: string[];
   targetLen: number;
   lastX: number[];
@@ -271,6 +273,7 @@ type CachedJit = {
   affectsMask: Float64Array | null;
   combinedBuffer: Float32Array;
   trialBuffer: Float32Array;
+  trialBatchBuffer: Float32Array;
   x0Buffer: Float64Array;
   gBuffer: Float64Array;
   renderBuffer: Float32Array;
@@ -301,6 +304,7 @@ export function minimize(
       jitLoss: null,
       jitGrad: null,
       jitRender: null,
+      jitBatchLoss: null,
       renderIds: [],
       targetLen: 0,
       lastLoss: 0,
@@ -309,6 +313,7 @@ export function minimize(
       affectsMask: null,
       combinedBuffer: null,
       trialBuffer: null,
+      trialBatchBuffer: null,
       x0Buffer: null,
       gBuffer: null,
       renderBuffer: null,
@@ -323,12 +328,16 @@ export function minimize(
 
   const tLen = target.length;
   const totalLen = tLen + dim;
+  const trialBatchLen = totalLen * LINE_SEARCH_TRIALS;
   const combinedBuffer = cached?.combinedBuffer && cached.combinedBuffer.length === totalLen
     ? cached.combinedBuffer
     : new Float32Array(totalLen);
   const trialBuffer = cached?.trialBuffer && cached.trialBuffer.length === totalLen
     ? cached.trialBuffer
     : new Float32Array(totalLen);
+  const trialBatchBuffer = cached?.trialBatchBuffer && cached.trialBatchBuffer.length === trialBatchLen
+    ? cached.trialBatchBuffer
+    : new Float32Array(trialBatchLen);
   const x0Buffer = cached?.x0Buffer && cached.x0Buffer.length === dim
     ? cached.x0Buffer
     : new Float64Array(dim);
@@ -357,13 +366,14 @@ export function minimize(
     ? cached.bfgsHy
     : new Float64Array(dim);
 
-  let jitLoss: any, jitGrad: any, jitRender: any;
+  let jitLoss: any, jitGrad: any, jitRender: any, jitBatchLoss: any;
   let renderIds: string[] = cached?.renderIds ?? [];
   if (cached && cached.targetLen === tLen) {
     runtimeStats.jitCacheHits += 1;
     jitLoss = cached.jitLoss;
     jitGrad = cached.jitGrad;
     jitRender = cached.jitRender;
+    jitBatchLoss = cached.jitBatchLoss;
   } else {
     const splitParams = (combined: any) => {
       const pv: any[] = [];
@@ -400,6 +410,7 @@ export function minimize(
     jitLoss = jit(combinedFn);
     jitGrad = jit(jacfwd(combinedFn));
     jitRender = jit(renderOnlyFn);
+    jitBatchLoss = jit(vmap(combinedFn, [0]));
     runtimeStats.jitBuilds += 1;
     const probeX: number[] = [];
     for (const p of params) for (const v of toJSArr(p.value.ref)) probeX.push(v);
@@ -411,6 +422,7 @@ export function minimize(
       jitLoss,
       jitGrad,
       jitRender,
+      jitBatchLoss,
       renderIds,
       targetLen: tLen,
       lastLoss: cached?.lastLoss ?? 0,
@@ -419,6 +431,7 @@ export function minimize(
       affectsMask: null,
       combinedBuffer,
       trialBuffer,
+      trialBatchBuffer,
       x0Buffer,
       gBuffer,
       renderBuffer,
@@ -439,6 +452,10 @@ export function minimize(
     const tv = target[i];
     combinedBuffer[i] = tv;
     trialBuffer[i] = tv;
+  }
+  for (let ls = 0; ls < LINE_SEARCH_TRIALS; ls++) {
+    const row = ls * totalLen;
+    for (let i = 0; i < tLen; i++) trialBatchBuffer[row + i] = target[i];
   }
 
   if (lineSearchEnabled) {
@@ -514,18 +531,28 @@ export function minimize(
       }
 
       let alpha = Math.min(1.0, 8.0 / (Math.sqrt(stepNorm2) + 1e-6));
-      let accepted = false;
-      for (let ls = 0; ls < 12; ls++) {
+      let fillAlpha = alpha;
+      for (let ls = 0; ls < LINE_SEARCH_TRIALS; ls++) {
+        const row = ls * totalLen + tLen;
         for (let i = 0; i < dim; i++) {
-          trialBuffer[tLen + i] = x0Buffer[i] + alpha * bfgsStep[i];
+          trialBatchBuffer[row + i] = x0Buffer[i] + fillAlpha * bfgsStep[i];
         }
-        const fTrial = Number(toJS(jitLoss(np.array(trialBuffer, { dtype: np.float32 }))));
-        if (Number.isFinite(fTrial) && fTrial <= f0 + 1e-4 * alpha * descentDot) {
-          for (let i = 0; i < dim; i++) x[i] = trialBuffer[tLen + i];
+        fillAlpha *= 0.5;
+      }
+
+      const batchedTrialLosses = toJSArr(
+        jitBatchLoss(np.array(trialBatchBuffer, { dtype: np.float32 }).reshape([LINE_SEARCH_TRIALS, totalLen])),
+      );
+      let accepted = false;
+      let acceptedAlpha = alpha;
+      for (let ls = 0; ls < LINE_SEARCH_TRIALS; ls++) {
+        const fTrial = batchedTrialLosses[ls];
+        if (Number.isFinite(fTrial) && fTrial <= f0 + 1e-4 * acceptedAlpha * descentDot) {
+          for (let i = 0; i < dim; i++) x[i] = x0Buffer[i] + acceptedAlpha * bfgsStep[i];
           accepted = true;
           break;
         }
-        alpha *= 0.5;
+        acceptedAlpha *= 0.5;
       }
 
       if (!accepted) {
@@ -606,6 +633,7 @@ export function minimize(
     jitLoss,
     jitGrad,
     jitRender,
+    jitBatchLoss,
     renderIds,
     targetLen: tLen,
     lastLoss: Number.isFinite(loss) ? loss : 0,
@@ -614,6 +642,7 @@ export function minimize(
     affectsMask,
     combinedBuffer,
     trialBuffer,
+    trialBatchBuffer,
     x0Buffer,
     gBuffer,
     renderBuffer,
@@ -1077,12 +1106,14 @@ export class G9 {
     const jitLoss = jit(combinedFn);
     const jitGrad = jit(jacfwd(combinedFn));
     const jitRender = jit(renderOnlyFn);
+    const jitBatchLoss = jit(vmap(combinedFn, [0]));
     runtimeStats.warmupBuilds += 1;
     jitRender(np.array(x, { dtype: np.float32 }));
     return {
       jitLoss,
       jitGrad,
       jitRender,
+      jitBatchLoss,
       renderIds,
       targetLen: tLen,
       lastX: x,
@@ -1091,6 +1122,7 @@ export class G9 {
       affectsMask: null,
       combinedBuffer: new Float32Array(tLen + dim),
       trialBuffer: new Float32Array(tLen + dim),
+      trialBatchBuffer: new Float32Array((tLen + dim) * LINE_SEARCH_TRIALS),
       x0Buffer: new Float64Array(dim),
       gBuffer: new Float64Array(dim),
       renderBuffer: new Float32Array(dim),
