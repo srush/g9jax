@@ -1,4 +1,4 @@
-import { numpy as np } from "@jax-js/jax";
+import { numpy as np, vmap } from "@jax-js/jax";
 import { G9, minimize, point, line } from "./src/g9";
 
 if (typeof (globalThis as { Float16Array?: typeof Float32Array }).Float16Array === "undefined") {
@@ -173,6 +173,86 @@ run("line drag loss minimizes", () => {
   const coords = toList(params[0].value);
   assert(coords.length === 4, "line coords should stay 4D");
   assert(coords.every(Number.isFinite), "line coords should remain finite");
+});
+
+run("constrained line supports negative projection drag", () => {
+  const params: ParamState[] = [
+    { name: "line1", value: np.array([-100, -50, 100, -50], { dtype: np.float32 }) },
+    { name: "line2", value: np.array([-100, 0, 100, 0], { dtype: np.float32 }) },
+    { name: "line3", value: np.array([-100, 50, 100, 50], { dtype: np.float32 }) },
+  ];
+
+  const id = "line3";
+  const renderFn = (p: any) => ({
+    line1: line(p.line1),
+    line2: line(p.line2),
+    line3: line(p.line3),
+  });
+  const lossFn = (target: any, coords: any) => {
+    const cv = coords[id];
+    const fromPt = cv.ref.slice([0, 2]);
+    const toPt = cv.slice([2, 4]);
+    const dir = toPt.sub(fromPt.ref);
+    const r = target.ref.slice([2, 3]);
+    const predicted = fromPt.add(dir.mul(r));
+    const t = target.slice([0, 2]);
+    const d = predicted.sub(t);
+    return d.ref.mul(d).sum();
+  };
+
+  minimize(params, renderFn, lossFn, [-220, 50, -0.5], { line3: [1, 0, 0, 1] }, 8);
+  const line3 = toList(params[2].value);
+  assert(line3[0] < -100, "line3 x1 should move left for negative projection drag");
+});
+
+run("rings radius can repeatedly shrink", () => {
+  const SIDES = 8;
+  const offsets: number[] = [];
+  for (let i = 0; i < SIDES; i++) {
+    offsets.push((i / SIDES) * Math.PI * 2);
+  }
+  const OFFSETS = np.array(offsets, { dtype: np.float32 });
+  const params: ParamState[] = [
+    { name: "radius", value: np.array([120], { dtype: np.float32 }) },
+    { name: "angle", value: np.array([0], { dtype: np.float32 }) },
+  ];
+
+  const outerPt = (offset: any, angle: any, radius: any) => {
+    const a = angle.add(offset);
+    return np.concatenate([np.cos(a.ref).mul(radius.ref), np.sin(a).mul(radius)]);
+  };
+  const innerPt = (offset: any, angle: any, radius: any) => {
+    const a = angle.add(offset).neg();
+    return np.concatenate([np.cos(a.ref).mul(radius.ref), np.sin(a).mul(radius)]);
+  };
+  const vmapOuter = vmap(outerPt, [0, null, null]);
+  const vmapInner = vmap(innerPt, [0, null, null]);
+  const renderFn = (p: any) => {
+    const outerFlat = vmapOuter(OFFSETS.ref, p.angle.ref, p.radius.ref).reshape([SIDES * 2]);
+    const halfR = p.radius.div(2);
+    const innerFlat = vmapInner(OFFSETS.ref, p.angle, halfR).reshape([SIDES * 2]);
+    const pts: Record<string, any> = {};
+    for (let i = 0; i < SIDES; i++) {
+      const lo = i === SIDES - 1;
+      pts[`out${i}`] = point((lo ? outerFlat : outerFlat.ref).slice([i * 2, i * 2 + 2]));
+      const li = i === SIDES - 1;
+      pts[`in${i}`] = point((li ? innerFlat : innerFlat.ref).slice([i * 2, i * 2 + 2]), { fill: "#e11d48" });
+    }
+    return pts;
+  };
+
+  const lossFn = (target: any, coords: any) => {
+    const d = coords.out0.sub(target);
+    return d.ref.mul(d).sum();
+  };
+
+  let cached: any = undefined;
+  const targets = [[90, 0], [80, 0], [70, 0], [60, 0]];
+  for (const target of targets) {
+    cached = minimize(params, renderFn as any, lossFn as any, target, null, 10, cached);
+  }
+  const radius = toList(params[0].value)[0];
+  assert(radius <= 60.5, `radius should shrink to near target, got ${radius}`);
 });
 
 run("dragon render survives optimization path", () => {

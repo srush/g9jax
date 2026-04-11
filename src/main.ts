@@ -33,6 +33,36 @@ function runDemoFromTextarea(sectionId: string, canvasSelector: string) {
   }
 }
 
+function setRunError(card: Element | null, message: string) {
+  const errEl = card?.querySelector(".error-msg");
+  if (errEl instanceof HTMLElement) errEl.textContent = message;
+}
+
+function runDemoFromCard(card: Element): void {
+  const section = card.closest(".demo-section");
+  const sectionId = section?.id ?? "";
+  const canvasSelector = card instanceof HTMLElement ? card.dataset.target ?? "" : "";
+  if (!sectionId || !canvasSelector) return;
+  runDemoFromTextarea(sectionId, canvasSelector);
+}
+
+function bindRunButtons(): void {
+  document.addEventListener("click", (event) => {
+    const node = event.target;
+    if (!(node instanceof Element)) return;
+    const button = node.closest(".run-btn");
+    if (!button) return;
+    const card = button.closest(".demo-code");
+    if (!card) return;
+    try {
+      runDemoFromCard(card);
+      setRunError(card, "");
+    } catch (error: any) {
+      setRunError(card, String(error?.message ?? error));
+    }
+  });
+}
+
 (window as any).__runDemoFromTextarea = runDemoFromTextarea;
 
 async function main() {
@@ -71,6 +101,8 @@ async function main() {
       console.log("Backend switched to", defaultDevice().toString());
     });
   }
+
+  bindRunButtons();
 
   setBanner('<span class="spinner"></span> Rendering demos…');
 
