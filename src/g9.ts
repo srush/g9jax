@@ -709,6 +709,8 @@ class PointEl {
     this._cached = g9._warmup(lossFn, [0, 0]);
 
     addDrag(this.el, (_evt) => {
+      this._cached.lastConverged = false;
+      this._cached.lastHitLimit = false;
       const c0 = this._cachedCoords.slice();
       return {
         drag: (dx, dy) => {
@@ -790,6 +792,8 @@ class LineEl {
     this._cached = g9._warmup(lossFn, [0, 0, 0]);
 
     addDrag(this.el, (evt) => {
+      this._cached.lastConverged = false;
+      this._cached.lastHitLimit = false;
       const c = this._cachedCoords.slice();
       const off = g9.getOffset();
       const cx = evt.clientX - off.left;
@@ -1176,7 +1180,11 @@ export class G9 {
   ): CachedJit {
     const affectsObj = affects ?? {};
     const dragIterRaw = "dragIter" in affectsObj ? (affectsObj as any).dragIter : null;
-    const dragIterOverride = Array.isArray(dragIterRaw) ? Number(dragIterRaw[0]) : Number(dragIterRaw);
+    const dragIterOverride = dragIterRaw == null
+      ? NaN
+      : Array.isArray(dragIterRaw)
+        ? Number(dragIterRaw[0])
+        : Number(dragIterRaw);
     const maxIterCap = Number.isFinite(dragIterOverride)
       ? Math.max(0, Math.floor(dragIterOverride))
       : lineSearchEnabled
@@ -1190,7 +1198,9 @@ export class G9 {
     const c = minimize(this.params, this.renderFn, lossFn, target, affects, dragIterations, cached);
     emitOptimizeLoss(this.containerId, c.lastLoss);
     this._dragRenderCounter += 1;
-    if (c.lastX.length > 0 && (forceRender || this._dragRenderCounter % DRAG_RENDER_EVERY === 0)) {
+    // Always render when the drag target moves so a single moved frame cannot get skipped.
+    const shouldRender = forceRender || targetChanged || this._dragRenderCounter % DRAG_RENDER_EVERY === 0;
+    if (c.lastX.length > 0 && shouldRender) {
       this._renderFast(c);
       this._dragRenderCounter = 0;
     }
