@@ -214,10 +214,16 @@ export function minimize(
     let lr = Math.min(1.0, 10.0 / gmax);
     let improved = false;
 
-    for (let ls = 0; ls < 20; ls++) {
+    let bestX: number[] | null = null;
+    let bestF = f0;
+    for (let ls = 0; ls < 12; ls++) {
       const xn = x0.map((v, i) => v - lr * g[i]);
       const lsArr = np.array([...target, ...xn], { dtype: np.float32 });
       const f1 = toJS(jitLoss(lsArr));
+      if (f1 < bestF) {
+        bestF = f1;
+        bestX = xn;
+      }
       if (f1 < f0 - 1e-4 * lr * gnorm2) {
         x = xn;
         improved = true;
@@ -226,6 +232,10 @@ export function minimize(
       lr *= 0.5;
     }
 
+    if (!improved && bestX) {
+      x = bestX;
+      improved = true;
+    }
     if (!improved) break;
   }
 
@@ -345,8 +355,8 @@ class LineEl {
       const cy = evt.clientY - off.top;
       const ldx = c[2] - c[0], ldy = c[3] - c[1];
       const pdx = cx - c[0], pdy = cy - c[1];
-      const ll = Math.sqrt(ldx * ldx + ldy * ldy) || 1;
-      const r = Math.sqrt(pdx * pdx + pdy * pdy) / ll;
+      const ll2 = ldx * ldx + ldy * ldy;
+      const r = ll2 > 0 ? (pdx * ldx + pdy * ldy) / ll2 : 0;
 
       return (dx, dy) => {
         this._cached = doMinimize(id, lossFn, [cx + dx, cy + dy, r], this.args.affects, this._cached);
