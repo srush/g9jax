@@ -58,6 +58,7 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 const MOBILE_POINT_RADIUS_SCALE = 1.35;
 const DRAG_ITER_ADAPTIVE = 10;
 const DRAG_ITER_LINE_SEARCH = 18;
+const DRAG_RENDER_EVERY = 2;
 let activeDragCount = 0;
 let dragDebugEnabled = false;
 let lineSearchEnabled = false;
@@ -490,6 +491,7 @@ class PointEl {
       lossFn: LossFn,
       target: number[],
       affects: Record<string, any> | null | undefined,
+      forceRender: boolean,
       cached?: CachedJit,
     ) => CachedJit,
     g9: G9,
@@ -514,11 +516,15 @@ class PointEl {
         drag: (dx, dy) => {
           const pullX = c0[0] + dx;
           const pullY = c0[1] + dy;
-          this._cached = doMinimize(id, lossFn, [pullX, pullY], this.args.affects, this._cached);
+          this._cached = doMinimize(id, lossFn, [pullX, pullY], this.args.affects, false, this._cached);
           const model = this._cachedCoords;
           this.g9.setDragDebug([pullX, pullY], [model[0], model[1]]);
         },
-        end: () => this.g9.clearDragDebug(),
+        end: () => {
+          const c = this._cachedCoords;
+          this._cached = doMinimize(id, lossFn, [c[0], c[1]], this.args.affects, true, this._cached);
+          this.g9.clearDragDebug();
+        },
       };
     });
   }
@@ -559,6 +565,7 @@ class LineEl {
       lossFn: LossFn,
       target: number[],
       affects: Record<string, any> | null | undefined,
+      forceRender: boolean,
       cached?: CachedJit,
     ) => CachedJit,
     g9: G9,
@@ -598,13 +605,20 @@ class LineEl {
         drag: (dx, dy) => {
           const pullX = cx + dx;
           const pullY = cy + dy;
-          this._cached = doMinimize(id, lossFn, [pullX, pullY, r], this.args.affects, this._cached);
+          this._cached = doMinimize(id, lossFn, [pullX, pullY, r], this.args.affects, false, this._cached);
           const model = this._cachedCoords;
           const targetX = model[0] + (model[2] - model[0]) * r;
           const targetY = model[1] + (model[3] - model[1]) * r;
           this.g9.setDragDebug([pullX, pullY], [targetX, targetY]);
         },
-        end: () => this.g9.clearDragDebug(),
+        end: () => {
+          const c = this._cachedCoords;
+          const ldx = c[2] - c[0], ldy = c[3] - c[1];
+          const ll2 = ldx * ldx + ldy * ldy;
+          const rr = ll2 > 0 ? ((cx - c[0]) * ldx + (cy - c[1]) * ldy) / ll2 : r;
+          this._cached = doMinimize(id, lossFn, [cx, cy, rr], this.args.affects, true, this._cached);
+          this.g9.clearDragDebug();
+        },
       };
     });
   }
@@ -737,6 +751,7 @@ export class G9 {
   _rect: DOMRect | null;
   _debugPullEl: SVGCircleElement | null;
   _debugTargetEl: SVGCircleElement | null;
+  _dragRenderCounter: number;
 
   constructor(
     renderFn: RenderFn,
@@ -761,6 +776,7 @@ export class G9 {
     this._rect = null;
     this._debugPullEl = null;
     this._debugTargetEl = null;
+    this._dragRenderCounter = 0;
     liveG9Instances.add(this);
   }
 
@@ -925,11 +941,16 @@ export class G9 {
     lossFn: LossFn,
     target: number[],
     affects: Record<string, any> | null | undefined,
+    forceRender = false,
     cached?: CachedJit,
   ): CachedJit {
     const dragIterations = lineSearchEnabled ? DRAG_ITER_LINE_SEARCH : DRAG_ITER_ADAPTIVE;
     const c = minimize(this.params, this.renderFn, lossFn, target, affects, dragIterations, cached);
-    this._renderFast(c);
+    this._dragRenderCounter += 1;
+    if (forceRender || this._dragRenderCounter % DRAG_RENDER_EVERY === 0) {
+      this._renderFast(c);
+      this._dragRenderCounter = 0;
+    }
     return c;
   }
 
