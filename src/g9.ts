@@ -189,6 +189,10 @@ export function minimize(
     jitRender(np.array(x, { dtype: np.float64 }));
   }
 
+  if (maxIter === 0) {
+    return { jitLoss, jitGrad, jitRender, renderIds, targetLen: tLen, lastX: x };
+  }
+
   for (let it = 0; it < maxIter; it++) {
     const combined = np.array([...target, ...x], { dtype: np.float64 });
     const f0 = toJS(jitLoss(combined.ref));
@@ -236,6 +240,7 @@ class PointEl {
   el!: SVGCircleElement;
   args!: ShapeArgs;
   _cachedCoords!: number[];
+  _cached!: CachedJit;
 
   mount(
     id: string,
@@ -255,16 +260,18 @@ class PointEl {
     setAttrs(this.el, { id, r: 5, fill: "#333", cursor: "grab" });
     container.appendChild(this.el);
 
+    const lossFn: LossFn = (target, coords) => {
+      if (!coords[id]) return np.array([0], { dtype: np.float64 });
+      const d = coords[id].sub(target);
+      return d.ref.mul(d).sum();
+    };
+    if (!g9._pointCache) g9._pointCache = g9._warmup(lossFn, [0, 0]);
+    this._cached = g9._pointCache;
+
     addDrag(this.el, (_evt) => {
       const c0 = this._cachedCoords;
-      const lossFn: LossFn = (target, coords) => {
-        if (!coords[id]) return np.array([0], { dtype: np.float64 });
-        const d = coords[id].sub(target);
-        return d.ref.mul(d).sum();
-      };
-      let cached: CachedJit | undefined;
       return (dx, dy) => {
-        cached = doMinimize(id, lossFn, [c0[0] + dx, c0[1] + dy], this.args.affects, cached);
+        this._cached = doMinimize(id, lossFn, [c0[0] + dx, c0[1] + dy], this.args.affects, this._cached);
       };
     });
   }
@@ -295,6 +302,7 @@ class LineEl {
   el!: SVGLineElement;
   args!: ShapeArgs;
   _cachedCoords!: number[];
+  _cached!: CachedJit;
 
   mount(
     id: string,
@@ -314,6 +322,21 @@ class LineEl {
     setAttrs(this.el, { id, stroke: "#000", "stroke-width": 2, cursor: "grab" });
     container.appendChild(this.el);
 
+    const lossFn: LossFn = (target, coords) => {
+      if (!coords[id]) return np.array([0], { dtype: np.float64 });
+      const cv = coords[id];
+      const fromPt = cv.ref.slice([0, 2]);
+      const toPt = cv.slice([2, 4]);
+      const dir = toPt.sub(fromPt.ref);
+      const r = target.ref.slice([2, 3]);
+      const predicted = fromPt.add(dir.mul(r));
+      const t = target.slice([0, 2]);
+      const d = predicted.sub(t);
+      return d.ref.mul(d).sum();
+    };
+    if (!g9._lineCache) g9._lineCache = g9._warmup(lossFn, [0, 0, 0]);
+    this._cached = g9._lineCache;
+
     addDrag(this.el, (evt) => {
       const c = this._cachedCoords;
       const off = g9.getOffset();
@@ -324,19 +347,8 @@ class LineEl {
       const ll = Math.sqrt(ldx * ldx + ldy * ldy) || 1;
       const r = Math.sqrt(pdx * pdx + pdy * pdy) / ll;
 
-      const lossFn: LossFn = (target, coords) => {
-        if (!coords[id]) return np.array([0], { dtype: np.float64 });
-        const cv = coords[id];
-        const fromPt = cv.ref.slice([0, 2]);
-        const toPt = cv.slice([2, 4]);
-        const dir = toPt.sub(fromPt.ref);
-        const predicted = fromPt.add(dir.mul(r));
-        const d = predicted.sub(target);
-        return d.ref.mul(d).sum();
-      };
-      let cached: CachedJit | undefined;
       return (dx, dy) => {
-        cached = doMinimize(id, lossFn, [cx + dx, cy + dy], this.args.affects, cached);
+        this._cached = doMinimize(id, lossFn, [cx + dx, cy + dy, r], this.args.affects, this._cached);
       };
     });
   }
@@ -473,6 +485,60 @@ export class G9 {
     window.addEventListener("resize", h);
     this.resize();
     return this;
+  }
+
+  _pointCache?: CachedJit;
+  _lineCache?: CachedJit;
+
+  _warmup(lossFn: LossFn, target: number[]): CachedJit {
+    const sizes = this.params.map((p) => p.value.shape[0]);
+    const paramNames = this.params.map((p) => p.name);
+    const dim = sizes.reduce((a, b) => a + b, 0);
+    const tLen = target.length;
+    const x: number[] = [];
+    for (const p of this.params) {
+      const v = p.value.ref;
+      for (const n of toJSArr(v)) x.push(n);
+    }
+
+    const splitParams = (combined: any) => {
+      const pv: any[] = [];
+      let off = tLen;
+      for (let i = 0; i < sizes.length; i++) {
+        const n = sizes[i];
+        const isLast = i === sizes.length - 1;
+        pv.push((isLast ? combined : combined.ref).slice([off, off + n]));
+        off += n;
+      }
+      return pv;
+    };
+    const combinedFn = (combined: any) => {
+      const t = combined.ref.slice([0, tLen]);
+      const pv = splitParams(combined);
+      const coords = renderCoords(this.renderFn, paramNames, pv);
+      return lossFn(t, coords);
+    };
+    let renderIds: string[] = [];
+    const renderOnlyFn = (flat: any) => {
+      const pv: any[] = [];
+      let off = 0;
+      for (let i = 0; i < sizes.length; i++) {
+        const n = sizes[i];
+        const isLast = i === sizes.length - 1;
+        pv.push((isLast ? flat : flat.ref).slice([off, off + n]));
+        off += n;
+      }
+      const coords = renderCoords(this.renderFn, paramNames, pv);
+      renderIds = Object.keys(coords);
+      const arrays: any[] = [];
+      for (const c of Object.values(coords)) arrays.push(c);
+      return np.concatenate(arrays);
+    };
+    const jitLoss = jit(combinedFn);
+    const jitGrad = jit(jacfwd(combinedFn));
+    const jitRender = jit(renderOnlyFn);
+    jitRender(np.array(x, { dtype: np.float64 }));
+    return { jitLoss, jitGrad, jitRender, renderIds, targetLen: tLen, lastX: x };
   }
 
   _minimize(
