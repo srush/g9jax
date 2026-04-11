@@ -404,7 +404,7 @@ run("snake demo runs offline and supports repeated minimization", () => {
       let head = np.concatenate([params.x.ref, params.y.ref]);
       pts.p0 = point(head.ref, { fill: "#ef4444", r: 7, affects: { x: true, y: true } });
       for (let i = 0; i < turns.length; i++) {
-        angle = angle.ref.add(turns[i]);
+        angle = angle.ref.add(turns[i].ref);
         const step = np.concatenate([
           np.cos(angle.ref).mul(segmentLength),
           np.sin(angle.ref).mul(segmentLength),
@@ -454,13 +454,12 @@ run("tongs demo runs offline and supports repeated minimization", () => {
     (params: Record<string, any>) => {
       const rotate = (xy: any, a: any) => {
         const c = np.cos(a.ref);
-        const s = np.sin(a);
+        const s = np.sin(a.ref);
         const x = xy.ref.slice([0, 1]);
-        const y = xy.slice([1, 2]);
-        return np.concatenate([
-          c.ref.mul(x.ref).sub(s.ref.mul(y.ref)),
-          s.ref.mul(x.ref).add(c.mul(y)),
-        ]);
+        const y = xy.ref.slice([1, 2]);
+        const rx = c.ref.mul(x.ref).sub(s.ref.mul(y.ref));
+        const ry = s.ref.mul(x.ref).add(c.ref.mul(y.ref));
+        return np.concatenate([rx, ry]);
       };
 
       const pts: Record<string, any> = {};
@@ -475,10 +474,10 @@ run("tongs demo runs offline and supports repeated minimization", () => {
         const nyTop = yTop.ref.add(np.sin(params.b.ref).mul(SEGMENT * dir));
         const nyBottom = yBottom.ref.sub(np.sin(params.b.ref).mul(SEGMENT * dir));
 
-        const a0 = rotate(np.concatenate([x.ref, yTop.ref]), params.a);
-        const a1 = rotate(np.concatenate([nx.ref, nyTop.ref]), params.a);
-        const b0 = rotate(np.concatenate([x.ref, yBottom.ref]), params.a);
-        const b1 = rotate(np.concatenate([nx.ref, nyBottom.ref]), params.a);
+        const a0 = rotate(np.concatenate([x.ref, yTop.ref]), params.a.ref);
+        const a1 = rotate(np.concatenate([nx.ref, nyTop.ref]), params.a.ref);
+        const b0 = rotate(np.concatenate([x.ref, yBottom.ref]), params.a.ref);
+        const b1 = rotate(np.concatenate([nx.ref, nyBottom.ref]), params.a.ref);
 
         pts[`u${i}`] = line(np.concatenate([a0.ref, a1.ref]), {
           stroke: "#111827",
@@ -540,15 +539,9 @@ run("bezier demo runs offline and supports repeated minimization", () => {
       for (let i = 0; i < steps; i++) {
         const r = t.ref.mul(i / steps);
         const oneMinus = np.array([1], { dtype: np.float32 }).sub(r.ref);
-        const ax = start.ref.slice([0, 1]).mul(oneMinus.ref).add(middle.ref.slice([0, 1]).mul(r.ref));
-        const ay = start.ref.slice([1, 2]).mul(oneMinus.ref).add(middle.ref.slice([1, 2]).mul(r.ref));
-        const bx = middle.ref.slice([0, 1]).mul(oneMinus.ref).add(end.ref.slice([0, 1]).mul(r.ref));
-        const by = middle.ref.slice([1, 2]).mul(oneMinus.ref).add(end.ref.slice([1, 2]).mul(r.ref));
-        const a = np.concatenate([ax, ay]);
-        const b = np.concatenate([bx, by]);
-        const cx = ax.ref.mul(oneMinus.ref).add(bx.ref.mul(r.ref));
-        const cy = ay.ref.mul(oneMinus.ref).add(by.ref.mul(r.ref));
-        const c = np.concatenate([cx, cy]);
+        const a = start.ref.mul(oneMinus.ref).add(middle.ref.mul(r.ref));
+        const b = middle.ref.mul(oneMinus.ref).add(end.ref.mul(r.ref));
+        const c = a.ref.mul(oneMinus.ref).add(b.ref.mul(r.ref));
         if (i % 4 === 0) {
           pts[`step${i}`] = line(np.concatenate([a.ref, b.ref]), {
             stroke: "rgba(0,0,0,0.12)",
