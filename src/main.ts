@@ -32,34 +32,31 @@ function runDemoFromTextarea(sectionId: string, canvasSelector: string) {
 async function main() {
   setBanner('<span class="spinner"></span> Initialising jax-js runtime…');
 
-  let backendName = "unknown";
   try {
-    const backends = await init();
-    console.log("jax-js init complete, backends:", backends);
-    defaultDevice("cpu");
-    backendName = defaultDevice().toString();
-    console.log("jax-js default device forced to cpu");
+    await init();
+    console.log("jax-js init complete, devices:", devices);
   } catch (e: any) {
     console.warn("jax-js full init failed, trying cpu-only:", e.message || e);
     try {
       await init("cpu");
-      defaultDevice("cpu");
-      backendName = defaultDevice().toString();
-      console.log("jax-js cpu backend ready");
     } catch (e2: any) {
       console.warn("jax-js cpu init also failed:", e2.message || e2);
     }
   }
+
+  const preferred: Array<typeof devices[number]> = ["webgpu", "webgl", "cpu"];
+  const chosen = preferred.find((d) => devices.includes(d)) ?? devices[0];
+  defaultDevice(chosen);
+  console.log("jax-js default device:", chosen);
 
   const select = document.getElementById("backend-select") as HTMLSelectElement | null;
   if (select) {
     select.innerHTML = "";
     for (const d of devices) {
       const opt = document.createElement("option");
-      const name = d.toString();
-      opt.value = name;
-      opt.textContent = name;
-      if (name === backendName) opt.selected = true;
+      opt.value = d;
+      opt.textContent = d;
+      if (d === chosen) opt.selected = true;
       select.appendChild(opt);
     }
     select.addEventListener("change", () => {
