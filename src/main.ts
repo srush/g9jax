@@ -83,15 +83,6 @@ function bindRunButtons(): void {
   });
 }
 
-function bindDragDebugToggle(): void {
-  const checkbox = document.getElementById("drag-debug-toggle");
-  if (!(checkbox instanceof HTMLInputElement)) return;
-  checkbox.checked = getG9DragDebugEnabled();
-  checkbox.addEventListener("change", () => {
-    setG9DragDebugEnabled(checkbox.checked);
-  });
-}
-
 (window as any).__runDemoFromTextarea = runDemoFromTextarea;
 (window as any).__g9SetDragDebugEnabled = setG9DragDebugEnabled;
 (window as any).__g9SetLineSearchEnabled = setG9LineSearchEnabled;
@@ -179,7 +170,6 @@ async function main() {
 
   bindRunButtons();
   bindDebugControls();
-  bindDragDebugToggle();
 
   const demos = [
     ["section-points", "#demo-points"],
