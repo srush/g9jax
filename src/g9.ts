@@ -92,7 +92,7 @@ function writeVec(params: ParamState[], sizes: number[], x: number[]): void {
   let off = 0;
   for (let i = 0; i < params.length; i++) {
     const n = sizes[i];
-    params[i].value = np.array(x.slice(off, off + n), { dtype: np.float64 });
+    params[i].value = np.array(x.slice(off, off + n), { dtype: np.float32 });
     off += n;
   }
 }
@@ -186,7 +186,7 @@ export function minimize(
     jitRender = jit(renderOnlyFn);
     const probeX: number[] = [];
     for (const p of params) for (const v of toJSArr(p.value.ref)) probeX.push(v);
-    jitRender(np.array(probeX, { dtype: np.float64 }));
+    jitRender(np.array(probeX, { dtype: np.float32 }));
   }
 
   if (maxIter === 0) {
@@ -197,7 +197,7 @@ export function minimize(
   let x = readVec(params);
 
   for (let it = 0; it < maxIter; it++) {
-    const combined = np.array([...target, ...x], { dtype: np.float64 });
+    const combined = np.array([...target, ...x], { dtype: np.float32 });
     const f0 = toJS(jitLoss(combined.ref));
     const fullG = toJSArr(jitGrad(combined));
     const g = fullG.slice(tLen);
@@ -216,7 +216,7 @@ export function minimize(
 
     for (let ls = 0; ls < 20; ls++) {
       const xn = x0.map((v, i) => v - lr * g[i]);
-      const lsArr = np.array([...target, ...xn], { dtype: np.float64 });
+      const lsArr = np.array([...target, ...xn], { dtype: np.float32 });
       const f1 = toJS(jitLoss(lsArr));
       if (f1 < f0 - 1e-4 * lr * gnorm2) {
         x = xn;
@@ -264,7 +264,7 @@ class PointEl {
     container.appendChild(this.el);
 
     const lossFn: LossFn = (target, coords) => {
-      if (!coords[id]) return np.array([0], { dtype: np.float64 });
+      if (!coords[id]) return np.array([0], { dtype: np.float32 });
       const d = coords[id].sub(target);
       return d.ref.mul(d).sum();
     };
@@ -325,7 +325,7 @@ class LineEl {
     container.appendChild(this.el);
 
     const lossFn: LossFn = (target, coords) => {
-      if (!coords[id]) return np.array([0], { dtype: np.float64 });
+      if (!coords[id]) return np.array([0], { dtype: np.float32 });
       const cv = coords[id];
       const fromPt = cv.ref.slice([0, 2]);
       const toPt = cv.slice([2, 4]);
@@ -441,7 +441,7 @@ export class G9 {
     this.params = [];
     for (const [name, value] of Object.entries(initialParams)) {
       const arr = Array.isArray(value) ? value : [value];
-      this.params.push({ name, value: np.array(arr, { dtype: np.float64 }) });
+      this.params.push({ name, value: np.array(arr, { dtype: np.float32 }) });
     }
     this.elements = {};
     this.node = document.createElementNS(SVG_NS, "svg");
@@ -535,7 +535,7 @@ export class G9 {
     const jitLoss = jit(combinedFn);
     const jitGrad = jit(jacfwd(combinedFn));
     const jitRender = jit(renderOnlyFn);
-    jitRender(np.array(x, { dtype: np.float64 }));
+    jitRender(np.array(x, { dtype: np.float32 }));
     return { jitLoss, jitGrad, jitRender, renderIds, targetLen: tLen, lastX: x };
   }
 
@@ -552,7 +552,7 @@ export class G9 {
   }
 
   _renderFast(cached: CachedJit): void {
-    const flat = np.array(cached.lastX, { dtype: np.float64 });
+    const flat = np.array(cached.lastX, { dtype: np.float32 });
     const result = cached.jitRender(flat);
     const allCoords: number[] = typeof result?.dataSync === "function"
       ? Array.from(result.dataSync())
