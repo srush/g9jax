@@ -1,4 +1,15 @@
-import { G9, point, line, np, jit, getG9DragDebugEnabled, setG9DragDebugEnabled } from "./g9";
+import {
+  G9,
+  point,
+  line,
+  np,
+  jit,
+  getG9DragDebugEnabled,
+  setG9DragDebugEnabled,
+  getG9LineSearchEnabled,
+  setG9LineSearchEnabled,
+  getG9DebugLossStats,
+} from "./g9";
 import { defaultDevice, init, vmap, type Device } from "@jax-js/jax";
 
 function show(id: string) {
@@ -83,6 +94,50 @@ function bindDragDebugToggle(): void {
 
 (window as any).__runDemoFromTextarea = runDemoFromTextarea;
 (window as any).__g9SetDragDebugEnabled = setG9DragDebugEnabled;
+(window as any).__g9SetLineSearchEnabled = setG9LineSearchEnabled;
+
+function bindDebugControls(): void {
+  const debugToggle = document.getElementById("debug-drag-toggle") as HTMLInputElement | null;
+  const lineSearchToggle = document.getElementById("line-search-toggle") as HTMLInputElement | null;
+  const debugBox = document.getElementById("debug-stats-box");
+  const avgLossValue = document.getElementById("avg-opt-loss-value");
+  const avgLossCount = document.getElementById("avg-opt-loss-count");
+
+  const renderDebugStats = () => {
+    const debugEnabled = debugToggle?.checked ?? false;
+    if (!debugEnabled) {
+      if (debugBox instanceof HTMLElement) debugBox.style.display = "none";
+      return;
+    }
+    if (debugBox instanceof HTMLElement) debugBox.style.display = "block";
+    const stats = getG9DebugLossStats();
+    if (avgLossValue) {
+      avgLossValue.textContent = stats.count > 0 ? stats.average.toExponential(3) : "—";
+    }
+    if (avgLossCount) {
+      avgLossCount.textContent = String(stats.count);
+    }
+  };
+
+  if (debugToggle) {
+    debugToggle.checked = getG9DragDebugEnabled();
+    debugToggle.addEventListener("change", () => {
+      setG9DragDebugEnabled(debugToggle.checked);
+      renderDebugStats();
+    });
+  }
+
+  if (lineSearchToggle) {
+    lineSearchToggle.checked = getG9LineSearchEnabled();
+    lineSearchToggle.addEventListener("change", () => {
+      setG9LineSearchEnabled(lineSearchToggle.checked);
+    });
+  }
+
+  renderDebugStats();
+  window.setInterval(renderDebugStats, 200);
+}
+(window as any).__g9SetDragDebugEnabled = setG9DragDebugEnabled;
 (window as any).__g9GetDragDebugEnabled = getG9DragDebugEnabled;
 
 async function main() {
@@ -123,6 +178,7 @@ async function main() {
   }
 
   bindRunButtons();
+  bindDebugControls();
   bindDragDebugToggle();
 
   const demos = [

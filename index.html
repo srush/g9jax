@@ -60,6 +60,50 @@
       background: #e0f2fe;
       color: #0369a1;
     }
+    .hero-controls {
+      margin-top: 0.75rem;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem 1rem;
+      justify-content: center;
+      align-items: center;
+      color: var(--muted);
+      font-size: 0.82rem;
+      font-family: var(--mono);
+    }
+    .hero-controls .select-inline {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+    .hero-controls select {
+      font-family: var(--mono);
+      font-size: 0.82rem;
+      padding: 0.2rem 0.4rem;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      background: var(--card);
+      color: var(--fg);
+      cursor: pointer;
+    }
+    .hero-toggle {
+      cursor: pointer;
+      user-select: none;
+      -webkit-user-select: none;
+      white-space: nowrap;
+    }
+    .hero-toggle input {
+      vertical-align: middle;
+      margin-right: 0.35rem;
+    }
+    #debug-stats-box {
+      display: none;
+      margin-top: 0.35rem;
+      color: #334155;
+      font-size: 0.78rem;
+      font-family: var(--mono);
+      text-align: center;
+    }
 
     .container {
       max-width: 860px;
@@ -109,6 +153,11 @@
       user-select: none;
       -webkit-user-select: none;
       -webkit-touch-callout: none;
+    }
+    html.g9-dragging, html.g9-dragging body {
+      user-select: none !important;
+      -webkit-user-select: none !important;
+      overscroll-behavior: none;
     }
     .demo-code {
       position: relative;
@@ -200,15 +249,25 @@
     <span class="badge">SVG</span>
     <span class="badge">vmap</span>
   </div>
-  <div style="margin-top:0.75rem;">
-    <label for="backend-select" style="color:var(--muted);font-size:0.82rem;font-family:var(--mono);">Backend: </label>
-    <select id="backend-select" style="font-family:var(--mono);font-size:0.82rem;padding:0.2rem 0.4rem;border-radius:4px;border:1px solid var(--border);background:var(--card);color:var(--fg);cursor:pointer;">
-      <option value="">Loading…</option>
-    </select>
-    <label style="margin-left:0.8rem;color:var(--muted);font-size:0.82rem;font-family:var(--mono);cursor:pointer;user-select:none;">
-      <input id="drag-debug-toggle" type="checkbox" style="vertical-align:middle;margin-right:0.35rem;" />
+  <div class="hero-controls">
+    <div class="select-inline">
+      <label for="backend-select">Backend:</label>
+      <select id="backend-select">
+        <option value="">Loading…</option>
+      </select>
+    </div>
+    <label class="hero-toggle">
+      <input id="line-search-toggle" type="checkbox" />
+      Use old line search
+    </label>
+    <label class="hero-toggle">
+      <input id="debug-drag-toggle" type="checkbox" />
       Debug drag targets
     </label>
+  </div>
+  <div id="debug-stats-box">
+    Avg opt loss: <span id="avg-opt-loss-value">—</span>
+    (<span id="avg-opt-loss-count">0</span> samples)
   </div>
 </div>
 

@@ -58,7 +58,13 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 const MOBILE_POINT_RADIUS_SCALE = 1.35;
 let activeDragCount = 0;
 let dragDebugEnabled = false;
+let lineSearchEnabled = false;
 const liveG9Instances = new Set<G9>();
+const debugLossStats = {
+  sum: 0,
+  count: 0,
+  last: 0,
+};
 
 function setAttrs(el: Element, attrs: Record<string, any>): void {
   for (const [k, v] of Object.entries(attrs)) {
@@ -97,11 +103,33 @@ function endGlobalDrag(): void {
 
 export function setG9DragDebugEnabled(enabled: boolean): void {
   dragDebugEnabled = enabled;
+  if (enabled) {
+    debugLossStats.sum = 0;
+    debugLossStats.count = 0;
+    debugLossStats.last = 0;
+  }
   for (const g9 of liveG9Instances) g9.syncDebugVisibility();
 }
 
 export function getG9DragDebugEnabled(): boolean {
   return dragDebugEnabled;
+}
+
+export function setG9LineSearchEnabled(enabled: boolean): void {
+  lineSearchEnabled = enabled;
+}
+
+export function getG9LineSearchEnabled(): boolean {
+  return lineSearchEnabled;
+}
+
+export function getG9DebugLossStats(): { average: number; count: number; last: number } {
+  const average = debugLossStats.count > 0 ? debugLossStats.sum / debugLossStats.count : 0;
+  return {
+    average,
+    count: debugLossStats.count,
+    last: debugLossStats.last,
+  };
 }
 
 function markDraggable(el: SVGElement): void {
@@ -127,6 +155,11 @@ function toJSArr(arr: any): number[] {
   }
   if (Array.isArray(arr)) return arr.map(Number);
   return [Number(arr)];
+}
+
+function evalLoss(jitLoss: any, targetLen: number, x: number[], combinedBuffer: Float32Array): number {
+  for (let i = 0; i < x.length; i++) combinedBuffer[targetLen + i] = x[i];
+  return Number(toJS(jitLoss(np.array(combinedBuffer, { dtype: np.float32 }))));
 }
 
 // ---------------------------------------------------------------------------
@@ -370,6 +403,32 @@ export function minimize(
     let gmax = 0;
     for (let i = 0; i < dim; i++) gmax = Math.max(gmax, Math.abs(gBuffer[i]));
 
+    if (lineSearchEnabled) {
+      for (let i = 0; i < dim; i++) x0Buffer[i] = x[i];
+      const f0 = evalLoss(jitLoss, tLen, x, combinedBuffer);
+      let alpha = Math.min(1.0, 8.0 / (gmax + 1e-6));
+      let accepted = false;
+
+      for (let ls = 0; ls < 8; ls++) {
+        for (let i = 0; i < dim; i++) {
+          trialBuffer[tLen + i] = x0Buffer[i] - alpha * gBuffer[i];
+        }
+        const fTrial = Number(toJS(jitLoss(np.array(trialBuffer, { dtype: np.float32 }))));
+        if (Number.isFinite(fTrial) && fTrial <= f0 - 1e-4 * alpha * gnorm2) {
+          for (let i = 0; i < dim; i++) x[i] = trialBuffer[tLen + i];
+          accepted = true;
+          break;
+        }
+        alpha *= 0.5;
+      }
+
+      if (!accepted) {
+        const fallbackStep = Math.min(0.12, 2.0 / (Math.sqrt(gnorm2) + 1e-6));
+        for (let i = 0; i < dim; i++) x[i] -= fallbackStep * gBuffer[i];
+      }
+      continue;
+    }
+
     const lr = Math.min(0.35, 8.0 / (gmax + 1e-6));
     const momentum = 0.7;
     const maxStep = 18.0;
@@ -378,6 +437,15 @@ export function minimize(
       velocityBuffer[i] = v;
       const delta = v > maxStep ? maxStep : v < -maxStep ? -maxStep : v;
       x[i] += delta;
+    }
+  }
+
+  if (dragDebugEnabled) {
+    const loss = evalLoss(jitLoss, tLen, x, combinedBuffer);
+    if (Number.isFinite(loss)) {
+      debugLossStats.sum += loss;
+      debugLossStats.count += 1;
+      debugLossStats.last = loss;
     }
   }
 
