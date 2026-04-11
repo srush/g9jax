@@ -55,11 +55,23 @@ export function line(
 // ---------------------------------------------------------------------------
 
 const SVG_NS = "http://www.w3.org/2000/svg";
+const MOBILE_POINT_RADIUS_SCALE = 1.35;
 
 function setAttrs(el: Element, attrs: Record<string, any>): void {
   for (const [k, v] of Object.entries(attrs)) {
     if (v != null) el.setAttributeNS(null, k, String(v));
   }
+}
+
+function hasCoarsePointer(): boolean {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return false;
+  }
+  return window.matchMedia("(pointer: coarse)").matches;
+}
+
+function scalePointRadius(radius: number): number {
+  return hasCoarsePointer() ? radius * MOBILE_POINT_RADIUS_SCALE : radius;
 }
 
 function markDraggable(el: SVGElement): void {
@@ -383,7 +395,7 @@ class PointEl {
     this.container = container;
     this.g9 = g9;
     this.el = document.createElementNS(SVG_NS, "circle");
-    setAttrs(this.el, { id, r: 5, fill: "#333", cursor: "grab" });
+    setAttrs(this.el, { id, r: scalePointRadius(5), fill: "#333", cursor: "grab" });
     markDraggable(this.el);
     container.appendChild(this.el);
 
@@ -415,7 +427,7 @@ class PointEl {
     this.args = args;
     const a: Record<string, any> = {};
     if (args.fill) a.fill = args.fill;
-    if (args.r) a.r = toJS(args.r);
+    if (args.r != null) a.r = scalePointRadius(toJS(args.r));
     if (args.stroke) a.stroke = args.stroke;
     if (args["stroke-width"]) a["stroke-width"] = args["stroke-width"];
     setAttrs(this.el, a);
@@ -718,7 +730,7 @@ export class G9 {
     affects: Record<string, any> | null | undefined,
     cached?: CachedJit,
   ): CachedJit {
-    const c = minimize(this.params, this.renderFn, lossFn, target, affects, 6, cached);
+    const c = minimize(this.params, this.renderFn, lossFn, target, affects, 8, cached);
     this._renderFast(c);
     return c;
   }

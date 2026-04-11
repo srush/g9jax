@@ -393,4 +393,260 @@ run("tree render survives optimization path", () => {
   assert(toList(params[2].value).every(Number.isFinite), "tree attenuation should remain finite");
 });
 
+run("snake demo runs offline and supports repeated minimization", () => {
+  const host = installFakeDom();
+  const g9 = new G9(
+    (params: Record<string, any>) => {
+      const pts: Record<string, any> = {};
+      const turns = [params.r1, params.r2, params.r3, params.r4];
+      const segmentLength = 36;
+      let angle = np.array([0], { dtype: np.float32 });
+      let head = np.concatenate([params.x.ref, params.y.ref]);
+      pts.p0 = point(head.ref, { fill: "#ef4444", r: 7, affects: { x: true, y: true } });
+      for (let i = 0; i < turns.length; i++) {
+        angle = angle.ref.add(turns[i].ref);
+        const step = np.concatenate([
+          np.cos(angle.ref).mul(segmentLength),
+          np.sin(angle.ref).mul(segmentLength),
+        ]);
+        const next = head.ref.add(step.ref);
+        pts[`s${i}`] = line(np.concatenate([head.ref, next.ref]), {
+          stroke: "#1f2937",
+          "stroke-width": 5 - i,
+          "stroke-linecap": "round",
+          affects: { r1: true, r2: true, r3: true, r4: true },
+        });
+        pts[`p${i + 1}`] = point(next.ref, { fill: "#0ea5e9", r: 5 });
+        head = next;
+      }
+      return pts;
+    },
+    {
+      r1: [6.2594],
+      r2: [12.5397],
+      r3: [12.708],
+      r4: [6.0184],
+      x: [84],
+      y: [12],
+    },
+  );
+  g9.align("center", "center").insertInto(host as any);
+
+  const lossFn = (target: any, coords: any) => {
+    const d = coords.p0.sub(target);
+    return d.ref.mul(d).sum();
+  };
+
+  let cached: any = undefined;
+  for (const target of [[88, 20], [70, 28], [96, -6]]) {
+    cached = minimize((g9 as any).params, (g9 as any).renderFn, lossFn, target, { x: true, y: true }, 8, cached);
+    g9.render();
+  }
+
+  const x = toList((g9 as any).params[4].value)[0];
+  const y = toList((g9 as any).params[5].value)[0];
+  assert(Number.isFinite(x) && Number.isFinite(y), "snake demo params should remain finite");
+});
+
+run("tongs demo runs offline and supports repeated minimization", () => {
+  const host = installFakeDom();
+  const g9 = new G9(
+    (params: Record<string, any>) => {
+      const rotate = (xy: any, a: any) => {
+        const c = np.cos(a.ref);
+        const s = np.sin(a.ref);
+        const x = xy.ref.slice([0, 1]);
+        const y = xy.ref.slice([1, 2]);
+        const rx = c.ref.mul(x.ref).sub(s.ref.mul(y.ref));
+        const ry = s.ref.mul(x.ref).add(c.ref.mul(y.ref));
+        return np.concatenate([rx, ry]);
+      };
+
+      const pts: Record<string, any> = {};
+      const SEGMENT = 68;
+      let x = np.array([0], { dtype: np.float32 });
+      let yTop = np.array([0], { dtype: np.float32 });
+      let yBottom = np.sin(params.b.ref).mul(-SEGMENT);
+
+      for (let i = 0; i < 4; i++) {
+        const dir = i % 2 === 0 ? -1 : 1;
+        const nx = x.ref.add(np.cos(params.b.ref).mul(SEGMENT));
+        const nyTop = yTop.ref.add(np.sin(params.b.ref).mul(SEGMENT * dir));
+        const nyBottom = yBottom.ref.sub(np.sin(params.b.ref).mul(SEGMENT * dir));
+
+        const a0 = rotate(np.concatenate([x.ref, yTop.ref]), params.a.ref);
+        const a1 = rotate(np.concatenate([nx.ref, nyTop.ref]), params.a.ref);
+        const b0 = rotate(np.concatenate([x.ref, yBottom.ref]), params.a.ref);
+        const b1 = rotate(np.concatenate([nx.ref, nyBottom.ref]), params.a.ref);
+
+        pts[`u${i}`] = line(np.concatenate([a0.ref, a1.ref]), {
+          stroke: "#111827",
+          "stroke-width": 8,
+          "stroke-linecap": "round",
+        });
+        pts[`l${i}`] = line(np.concatenate([b0.ref, b1.ref]), {
+          stroke: "#111827",
+          "stroke-width": 8,
+          "stroke-linecap": "round",
+        });
+        pts[`up${i}`] = point(a1.ref, { fill: "#0ea5e9", r: 4, affects: { a: true, b: true } });
+        pts[`lp${i}`] = point(b1.ref, { fill: "#0ea5e9", r: 4, affects: { a: true, b: true } });
+
+        x = nx;
+        yTop = nyTop;
+        yBottom = nyBottom;
+      }
+      return pts;
+    },
+    { a: [0.3], b: [0.85] },
+  );
+  g9.align("center", "center").insertInto(host as any);
+
+  const lossFn = (target: any, coords: any) => {
+    const d = coords.up3.sub(target);
+    return d.ref.mul(d).sum();
+  };
+
+  let cached: any = undefined;
+  for (const target of [[120, -20], [110, 0], [95, 15]]) {
+    cached = minimize((g9 as any).params, (g9 as any).renderFn, lossFn, target, { a: true, b: true }, 8, cached);
+    g9.render();
+  }
+
+  const a = toList((g9 as any).params[0].value)[0];
+  const b = toList((g9 as any).params[1].value)[0];
+  assert(Number.isFinite(a) && Number.isFinite(b), "tongs demo params should remain finite");
+});
+
+run("bezier demo runs offline and supports repeated minimization", () => {
+  const host = installFakeDom();
+  const g9 = new G9(
+    (params: Record<string, any>) => {
+      const pts: Record<string, any> = {};
+      const start = params.start;
+      const middle = params.middle;
+      const end = params.end;
+      const steps = 30;
+      const t = params.t;
+
+      pts.ctrl1 = line(np.concatenate([start.ref, middle.ref]), { stroke: "rgba(0,0,0,0.25)" });
+      pts.ctrl2 = line(np.concatenate([middle.ref, end.ref]), { stroke: "rgba(0,0,0,0.25)" });
+      pts.pStart = point(start.ref, { fill: "#0ea5e9", r: 6 });
+      pts.pMiddle = point(middle.ref, { fill: "#f97316", r: 6 });
+      pts.pEnd = point(end.ref, { fill: "#0ea5e9", r: 6 });
+
+      const curve = [];
+      for (let i = 0; i < steps; i++) {
+        const r = t.ref.mul(i / steps);
+        const oneMinus = np.array([1], { dtype: np.float32 }).sub(r.ref);
+        const a = start.ref.mul(oneMinus.ref).add(middle.ref.mul(r.ref));
+        const b = middle.ref.mul(oneMinus.ref).add(end.ref.mul(r.ref));
+        const c = a.ref.mul(oneMinus.ref).add(b.ref.mul(r.ref));
+        if (i % 4 === 0) {
+          pts[`step${i}`] = line(np.concatenate([a.ref, b.ref]), {
+            stroke: "rgba(0,0,0,0.12)",
+            affects: { t: true },
+          });
+        }
+        curve.push(c);
+      }
+
+      for (let i = 1; i < curve.length; i++) {
+        pts[`curve${i}`] = line(np.concatenate([curve[i - 1].ref, curve[i].ref]), {
+          stroke: "#111827",
+          "stroke-width": 4,
+          affects: { t: true },
+        });
+      }
+
+      const tY = np.array([140], { dtype: np.float32 });
+      const tX = t.ref.mul(240).sub(120);
+      pts.tAxis = line(np.array([-120, 140, 120, 140], { dtype: np.float32 }), {
+        stroke: "#94a3b8",
+        "stroke-width": 2,
+      });
+      pts.tKnob = point(np.concatenate([tX, tY]), {
+        fill: "#16a34a",
+        r: 7,
+        affects: { t: true },
+      });
+      return pts;
+    },
+    {
+      start: [-110, 62],
+      middle: [0, -150],
+      end: [130, 58],
+      t: [0.5],
+    },
+  );
+  g9.align("center", "center").insertInto(host as any);
+
+  const lossFn = (target: any, coords: any) => {
+    const d = coords.tKnob.sub(target);
+    return d.ref.mul(d).sum();
+  };
+
+  let cached: any = undefined;
+  for (const target of [[-96, 140], [96, 140], [24, 140]]) {
+    cached = minimize((g9 as any).params, (g9 as any).renderFn, lossFn, target, { t: true }, 8, cached);
+    g9.render();
+  }
+
+  const t = toList((g9 as any).params[3].value)[0];
+  assert(Number.isFinite(t), "bezier demo t parameter should remain finite");
+});
+
+run("adaptive-step optimizer converges better with 8 iterations than 6", () => {
+  const SIDES = 8;
+  const offsets: number[] = [];
+  for (let i = 0; i < SIDES; i++) {
+    offsets.push((i / SIDES) * Math.PI * 2);
+  }
+  const OFFSETS = np.array(offsets, { dtype: np.float32 });
+
+  const renderFn = (p: any) => {
+    const outerPt = (offset: any, angle: any, radius: any) => {
+      const a = angle.add(offset);
+      return np.concatenate([np.cos(a.ref).mul(radius.ref), np.sin(a).mul(radius)]);
+    };
+    const innerPt = (offset: any, angle: any, radius: any) => {
+      const a = angle.add(offset).neg();
+      return np.concatenate([np.cos(a.ref).mul(radius.ref), np.sin(a).mul(radius)]);
+    };
+    const vmapOuter = vmap(outerPt, [0, null, null]);
+    const vmapInner = vmap(innerPt, [0, null, null]);
+    const outerFlat = vmapOuter(OFFSETS.ref, p.angle.ref, p.radius.ref).reshape([SIDES * 2]);
+    const halfR = p.radius.div(2);
+    const innerFlat = vmapInner(OFFSETS.ref, p.angle, halfR).reshape([SIDES * 2]);
+    const pts: Record<string, any> = {};
+    for (let i = 0; i < SIDES; i++) {
+      const lo = i === SIDES - 1;
+      pts[`out${i}`] = point((lo ? outerFlat : outerFlat.ref).slice([i * 2, i * 2 + 2]));
+      const li = i === SIDES - 1;
+      pts[`in${i}`] = point((li ? innerFlat : innerFlat.ref).slice([i * 2, i * 2 + 2]), { fill: "#e11d48" });
+    }
+    return pts;
+  };
+  const lossFn = (target: any, coords: any) => {
+    const d = coords.out0.sub(target);
+    return d.ref.mul(d).sum();
+  };
+  const runWithIter = (iter: number) => {
+    const params: ParamState[] = [
+      { name: "radius", value: np.array([120], { dtype: np.float32 }) },
+      { name: "angle", value: np.array([0], { dtype: np.float32 }) },
+    ];
+    let cached: any = undefined;
+    for (const target of [[94, 0], [82, 0], [70, 0], [58, 0]]) {
+      cached = minimize(params, renderFn as any, lossFn as any, target, { radius: true }, iter, cached);
+    }
+    return Math.abs(toList(params[0].value)[0] - 58);
+  };
+
+  const err6 = runWithIter(6);
+  const err8 = runWithIter(8);
+  console.log(`convergence residual (6 vs 8 iters): ${err6.toFixed(4)} vs ${err8.toFixed(4)}`);
+  assert(err8 < err6, `expected 8 iterations to converge better than 6 (${err8} !< ${err6})`);
+});
+
 console.log("All offline regression tests passed.");
