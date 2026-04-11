@@ -275,6 +275,11 @@ type CachedJit = {
   gBuffer: Float64Array;
   renderBuffer: Float32Array;
   velocityBuffer: Float64Array;
+  bfgsH: Float64Array;
+  bfgsStep: Float64Array;
+  bfgsGradNext: Float64Array;
+  bfgsY: Float64Array;
+  bfgsHy: Float64Array;
 };
 
 export function minimize(
@@ -308,6 +313,11 @@ export function minimize(
       gBuffer: null,
       renderBuffer: null,
       velocityBuffer: null,
+      bfgsH: null,
+      bfgsStep: null,
+      bfgsGradNext: null,
+      bfgsY: null,
+      bfgsHy: null,
     };
   }
 
@@ -331,6 +341,21 @@ export function minimize(
   const renderBuffer = cached?.renderBuffer && cached.renderBuffer.length === dim
     ? cached.renderBuffer
     : new Float32Array(dim);
+  const bfgsH = cached?.bfgsH && cached.bfgsH.length === dim * dim
+    ? cached.bfgsH
+    : new Float64Array(dim * dim);
+  const bfgsStep = cached?.bfgsStep && cached.bfgsStep.length === dim
+    ? cached.bfgsStep
+    : new Float64Array(dim);
+  const bfgsGradNext = cached?.bfgsGradNext && cached.bfgsGradNext.length === dim
+    ? cached.bfgsGradNext
+    : new Float64Array(dim);
+  const bfgsY = cached?.bfgsY && cached.bfgsY.length === dim
+    ? cached.bfgsY
+    : new Float64Array(dim);
+  const bfgsHy = cached?.bfgsHy && cached.bfgsHy.length === dim
+    ? cached.bfgsHy
+    : new Float64Array(dim);
 
   let jitLoss: any, jitGrad: any, jitRender: any;
   let renderIds: string[] = cached?.renderIds ?? [];
@@ -398,6 +423,11 @@ export function minimize(
       gBuffer,
       renderBuffer,
       velocityBuffer,
+      bfgsH,
+      bfgsStep,
+      bfgsGradNext,
+      bfgsY,
+      bfgsHy,
     };
   }
 
@@ -409,6 +439,11 @@ export function minimize(
     const tv = target[i];
     combinedBuffer[i] = tv;
     trialBuffer[i] = tv;
+  }
+
+  if (lineSearchEnabled) {
+    bfgsH.fill(0);
+    for (let i = 0; i < dim; i++) bfgsH[i * dim + i] = 1;
   }
 
   for (let it = 0; it < maxIter; it++) {
@@ -431,15 +466,61 @@ export function minimize(
     if (lineSearchEnabled) {
       for (let i = 0; i < dim; i++) x0Buffer[i] = x[i];
       const f0 = evalLoss(jitLoss, tLen, x, combinedBuffer);
-      let alpha = Math.min(1.0, 8.0 / (gmax + 1e-6));
-      let accepted = false;
-
-      for (let ls = 0; ls < 8; ls++) {
+      let descentDot = 0;
+      let stepNorm2 = 0;
+      const maxBfgsCoordStep = 18.0;
+      const maxBfgsStepNorm = 24.0;
+      for (let i = 0; i < dim; i++) {
+        const row = i * dim;
+        let projected = 0;
+        for (let j = 0; j < dim; j++) projected += bfgsH[row + j] * gBuffer[j];
+        const mask = affectsMask ? affectsMask[i] : 1;
+        const rawStep = -projected * mask;
+        const step = rawStep > maxBfgsCoordStep
+          ? maxBfgsCoordStep
+          : rawStep < -maxBfgsCoordStep
+            ? -maxBfgsCoordStep
+            : rawStep;
+        bfgsStep[i] = step;
+        descentDot += gBuffer[i] * step;
+        stepNorm2 += step * step;
+      }
+      if (stepNorm2 > maxBfgsStepNorm * maxBfgsStepNorm) {
+        const scale = maxBfgsStepNorm / (Math.sqrt(stepNorm2) + 1e-12);
+        descentDot = 0;
+        stepNorm2 = 0;
         for (let i = 0; i < dim; i++) {
-          trialBuffer[tLen + i] = x0Buffer[i] - alpha * gBuffer[i];
+          bfgsStep[i] *= scale;
+          descentDot += gBuffer[i] * bfgsStep[i];
+          stepNorm2 += bfgsStep[i] * bfgsStep[i];
+        }
+      }
+
+      if (!(descentDot < 0) || stepNorm2 < 1e-20) {
+        bfgsH.fill(0);
+        for (let i = 0; i < dim; i++) bfgsH[i * dim + i] = 1;
+        descentDot = -gnorm2;
+        stepNorm2 = 0;
+        for (let i = 0; i < dim; i++) {
+          const fallback = -gBuffer[i];
+          const clipped = fallback > maxBfgsCoordStep
+            ? maxBfgsCoordStep
+            : fallback < -maxBfgsCoordStep
+              ? -maxBfgsCoordStep
+              : fallback;
+          bfgsStep[i] = clipped;
+          stepNorm2 += clipped * clipped;
+        }
+      }
+
+      let alpha = Math.min(1.0, 8.0 / (Math.sqrt(stepNorm2) + 1e-6));
+      let accepted = false;
+      for (let ls = 0; ls < 12; ls++) {
+        for (let i = 0; i < dim; i++) {
+          trialBuffer[tLen + i] = x0Buffer[i] + alpha * bfgsStep[i];
         }
         const fTrial = Number(toJS(jitLoss(np.array(trialBuffer, { dtype: np.float32 }))));
-        if (Number.isFinite(fTrial) && fTrial <= f0 - 1e-4 * alpha * gnorm2) {
+        if (Number.isFinite(fTrial) && fTrial <= f0 + 1e-4 * alpha * descentDot) {
           for (let i = 0; i < dim; i++) x[i] = trialBuffer[tLen + i];
           accepted = true;
           break;
@@ -448,8 +529,56 @@ export function minimize(
       }
 
       if (!accepted) {
+        bfgsH.fill(0);
+        for (let i = 0; i < dim; i++) bfgsH[i * dim + i] = 1;
         const fallbackStep = Math.min(0.12, 2.0 / (Math.sqrt(gnorm2) + 1e-6));
-        for (let i = 0; i < dim; i++) x[i] -= fallbackStep * gBuffer[i];
+        for (let i = 0; i < dim; i++) x[i] = x0Buffer[i] - fallbackStep * gBuffer[i];
+        continue;
+      }
+
+      for (let i = 0; i < dim; i++) combinedBuffer[tLen + i] = x[i];
+      const nextCombined = np.array(combinedBuffer, { dtype: np.float32 });
+      const nextGradFull = toJSArr(jitGrad(nextCombined));
+      if (affectsMask) {
+        for (let i = 0; i < dim; i++) bfgsGradNext[i] = nextGradFull[tLen + i] * affectsMask[i];
+      } else {
+        for (let i = 0; i < dim; i++) bfgsGradNext[i] = nextGradFull[tLen + i];
+      }
+
+      let ys = 0;
+      let sNorm2 = 0;
+      let yNorm2 = 0;
+      for (let i = 0; i < dim; i++) {
+        const si = x[i] - x0Buffer[i];
+        bfgsY[i] = bfgsGradNext[i] - gBuffer[i];
+        ys += bfgsY[i] * si;
+        sNorm2 += si * si;
+        yNorm2 += bfgsY[i] * bfgsY[i];
+      }
+
+      const curvatureFloor = 1e-6 * Math.sqrt(sNorm2 * yNorm2 + 1e-30);
+      if (!(ys > Math.max(1e-12, curvatureFloor))) {
+        bfgsH.fill(0);
+        for (let i = 0; i < dim; i++) bfgsH[i * dim + i] = 1;
+        continue;
+      }
+
+      for (let i = 0; i < dim; i++) {
+        const row = i * dim;
+        let hy = 0;
+        for (let j = 0; j < dim; j++) hy += bfgsH[row + j] * bfgsY[j];
+        bfgsHy[i] = hy;
+      }
+      let yHy = 0;
+      for (let i = 0; i < dim; i++) yHy += bfgsY[i] * bfgsHy[i];
+      const coeff = (ys + yHy) / (ys * ys);
+      for (let i = 0; i < dim; i++) {
+        const row = i * dim;
+        const si = x[i] - x0Buffer[i];
+        for (let j = 0; j < dim; j++) {
+          const sj = x[j] - x0Buffer[j];
+          bfgsH[row + j] += coeff * si * sj - (bfgsHy[i] * sj + si * bfgsHy[j]) / ys;
+        }
       }
       continue;
     }
@@ -489,6 +618,11 @@ export function minimize(
     gBuffer,
     renderBuffer,
     velocityBuffer,
+    bfgsH,
+    bfgsStep,
+    bfgsGradNext,
+    bfgsY,
+    bfgsHy,
   };
 }
 
@@ -700,11 +834,13 @@ function addDrag(
     e.stopPropagation();
     if (e.cancelable) e.preventDefault();
     beginGlobalDrag();
+    el.classList.add("g9-active-drag");
     const f = firstPointer(e);
     let session: DragSession;
     try {
       session = onStartCb(f);
     } catch (error) {
+      el.classList.remove("g9-active-drag");
       endGlobalDrag();
       throw error;
     }
@@ -714,10 +850,13 @@ function addDrag(
     let latestDy = 0;
     let rafId = 0;
 
-    const flush = () => {
-      rafId = 0;
+    const tick = () => {
       onDrag(latestDx, latestDy);
+      rafId = scheduleFrame(tick);
     };
+    // Immediate first solve gives instant visual feedback on touch-down.
+    onDrag(0, 0);
+    rafId = scheduleFrame(tick);
 
     function move(ev: MouseEvent | TouchEvent) {
       ev.stopPropagation();
@@ -725,9 +864,6 @@ function addDrag(
       const m = firstPointer(ev);
       latestDx = m.clientX - sx;
       latestDy = m.clientY - sy;
-      if (rafId === 0) {
-        rafId = scheduleFrame(flush);
-      }
     }
     function end(ev: MouseEvent | TouchEvent) {
       ev.stopPropagation();
@@ -735,13 +871,14 @@ function addDrag(
       if (rafId !== 0) {
         cancelFrame(rafId);
         rafId = 0;
-        onDrag(latestDx, latestDy);
       }
+      onDrag(latestDx, latestDy);
       document.removeEventListener("mousemove", move);
       document.removeEventListener("touchmove", move);
       document.removeEventListener("mouseup", end);
       document.removeEventListener("touchend", end);
       document.removeEventListener("touchcancel", end);
+      el.classList.remove("g9-active-drag");
       session.end?.();
       endGlobalDrag();
     }
@@ -958,6 +1095,11 @@ export class G9 {
       gBuffer: new Float64Array(dim),
       renderBuffer: new Float32Array(dim),
       velocityBuffer: new Float64Array(dim),
+      bfgsH: new Float64Array(dim * dim),
+      bfgsStep: new Float64Array(dim),
+      bfgsGradNext: new Float64Array(dim),
+      bfgsY: new Float64Array(dim),
+      bfgsHy: new Float64Array(dim),
     };
   }
 
