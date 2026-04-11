@@ -464,12 +464,12 @@ return new G9((params) => {
     const dir = np.concatenate([dx, dy]);
     const tip = base.ref.add(dir.mul(length.ref));
     pts["pt"+name] = point(tip.ref,
-      {fill: "#22c55e", r: 3});
+      {fill: "#22c55e", r: 3,
+       affects: {deltaAngle: true, attenuation: true}});
     pts["ln"+name] = line(np.concatenate([base, tip.ref]), {
       stroke: depth > 3 ? "#8B4513" : "#22c55e",
       "stroke-width": Math.max(1, depth*0.7+1),
       "stroke-linecap": "round",
-      affects: {deltaAngle: true, attenuation: true},
     });
     if (depth > 0) {
       const nl1 = length.ref.mul(params.attenuation.ref);
