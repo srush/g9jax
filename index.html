@@ -207,7 +207,7 @@
     <div class="demo-card">
       <div class="demo-canvas" id="demo-points"></div>
       <div class="demo-code" data-target="#demo-points">
-        <textarea>const FLIP = np.array([[0,1],[1,0]], {dtype: np.float64});
+        <textarea>const FLIP = np.array([[0,1],[1,0]], {dtype: np.float32});
 
 return new G9((params) => {
   const xy = params.xy;
@@ -231,7 +231,7 @@ return new G9((params) => {
 const offsets = [];
 for (let i = 0; i < SIDES; i++)
   offsets.push((i / SIDES) * Math.PI * 2);
-const OFFSETS = np.array(offsets, {dtype: np.float64});
+const OFFSETS = np.array(offsets, {dtype: np.float32});
 
 const outerPt = (offset, angle, radius) => {
   const a = angle.add(offset);
@@ -307,7 +307,7 @@ return new G9((params) => ({
     <div class="demo-card">
       <div class="demo-canvas" id="demo-dragon"></div>
       <div class="demo-code" data-target="#demo-dragon">
-        <textarea>const ROT = np.array([[0,1],[-1,0]], {dtype: np.float64});
+        <textarea>const ROT = np.array([[0,1],[-1,0]], {dtype: np.float32});
 const lineOpts = {"stroke-width": 3, "stroke-linecap": "round",
   affects: {squareness: true}};
 
@@ -374,10 +374,10 @@ return new G9((params) => {
       branch(tip, nl2, ra, depth-1, name+"r");
     }
   }
-  const root = np.array([0,120], {dtype: np.float64});
-  const startAngle = np.array([-90], {dtype: np.float64});
+  const root = np.array([0,120], {dtype: np.float32});
+  const startAngle = np.array([-90], {dtype: np.float32});
   branch(root, params.startLength.ref, startAngle, 4, "");
-  pts["root"] = point(np.array([0,120], {dtype: np.float64}),
+  pts["root"] = point(np.array([0,120], {dtype: np.float32}),
     {fill: "#8B4513", r: 5,
      affects: {startLength: true}});
   return pts;

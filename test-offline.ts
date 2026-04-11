@@ -60,12 +60,12 @@ function installFakeDom(): FakeElement {
 
 run("point drag loss minimizes", () => {
   const params: ParamState[] = [
-    { name: "xy", value: np.array([40, 0], { dtype: np.float64 }) },
+    { name: "xy", value: np.array([40, 0], { dtype: np.float32 }) },
   ];
 
   const renderFn = (p: any) => {
     const xy = p.xy;
-    const flip = np.array([[0, 1], [1, 0]], { dtype: np.float64 });
+    const flip = np.array([[0, 1], [1, 0]], { dtype: np.float32 });
     const p2 = np.dot(flip, xy.ref);
     return { p1: point(xy), p2: point(p2) };
   };
@@ -81,10 +81,10 @@ run("point drag loss minimizes", () => {
 });
 
 run("basic example render path works exactly as in main.ts", () => {
-  const xy = np.array([40, 0], { dtype: np.float64 });
+  const xy = np.array([40, 0], { dtype: np.float32 });
   const render = (params: { xy: any }) => {
     const value = params.xy;
-    const flip = np.array([[0, 1], [1, 0]], { dtype: np.float64 });
+    const flip = np.array([[0, 1], [1, 0]], { dtype: np.float32 });
     const p2 = np.dot(flip, value.ref);
     return { p1: point(value), p2: point(p2) };
   };
@@ -99,7 +99,7 @@ run("basic example survives repeated G9 minimize/render cycles", () => {
   const g9 = new G9(
     (params: Record<string, any>) => {
       const xy = params.xy;
-      const flip = np.array([[0, 1], [1, 0]], { dtype: np.float64 });
+      const flip = np.array([[0, 1], [1, 0]], { dtype: np.float32 });
       const p2 = np.dot(flip, xy.ref);
       return { p1: point(xy), p2: point(p2) };
     },
@@ -127,12 +127,12 @@ run("rings example render path works exactly as in main.ts", () => {
   const angleOffsets: number[] = [];
   for (let i = 0; i < SIDES; i++) angleOffsets.push((i / SIDES) * Math.PI * 2);
 
-  const radius = np.array([120], { dtype: np.float64 });
-  const angle = np.array([0], { dtype: np.float64 });
+  const radius = np.array([120], { dtype: np.float32 });
+  const angle = np.array([0], { dtype: np.float32 });
   const render = (params: { radius: any; angle: any }) => {
     const pts: Record<string, any> = {};
     for (let i = 0; i < SIDES; i++) {
-      const offset = np.array([angleOffsets[i]], { dtype: np.float64 });
+      const offset = np.array([angleOffsets[i]], { dtype: np.float32 });
       const a = params.angle.ref.add(offset);
       const ox = np.cos(a.ref).mul(params.radius.ref);
       const oy = np.sin(a.ref).mul(params.radius.ref);
@@ -154,7 +154,7 @@ run("rings example render path works exactly as in main.ts", () => {
 
 run("line drag loss minimizes", () => {
   const params: ParamState[] = [
-    { name: "line1", value: np.array([-100, -50, 100, -50], { dtype: np.float64 }) },
+    { name: "line1", value: np.array([-100, -50, 100, -50], { dtype: np.float32 }) },
   ];
 
   const renderFn = (p: any) => ({ l1: line(p.line1) });
@@ -177,13 +177,13 @@ run("line drag loss minimizes", () => {
 
 run("dragon render survives optimization path", () => {
   const params: ParamState[] = [
-    { name: "fromPt", value: np.array([175, 96], { dtype: np.float64 }) },
-    { name: "toPt", value: np.array([-175, 39], { dtype: np.float64 }) },
-    { name: "squareness", value: np.array([0.8], { dtype: np.float64 }) },
+    { name: "fromPt", value: np.array([175, 96], { dtype: np.float32 }) },
+    { name: "toPt", value: np.array([-175, 39], { dtype: np.float32 }) },
+    { name: "squareness", value: np.array([0.8], { dtype: np.float32 }) },
   ];
 
   const renderFn = (p: any) => {
-    const reverseM = np.array([[0, 1], [-1, 0]], { dtype: np.float64 });
+    const reverseM = np.array([[0, 1], [-1, 0]], { dtype: np.float32 });
     const shapes: Record<string, any> = {};
     function dragon(a: any, b: any, dir: number, level: number, name: string): void {
       if (level === 0) {
@@ -215,9 +215,9 @@ run("dragon render survives optimization path", () => {
 
 run("tree render survives optimization path", () => {
   const params: ParamState[] = [
-    { name: "deltaAngle", value: np.array([33], { dtype: np.float64 }) },
-    { name: "startLength", value: np.array([65], { dtype: np.float64 }) },
-    { name: "attenuation", value: np.array([0.7], { dtype: np.float64 }) },
+    { name: "deltaAngle", value: np.array([33], { dtype: np.float32 }) },
+    { name: "startLength", value: np.array([65], { dtype: np.float32 }) },
+    { name: "attenuation", value: np.array([0.7], { dtype: np.float32 }) },
   ];
 
   const renderFn = (p: any) => {
@@ -236,8 +236,8 @@ run("tree render survives optimization path", () => {
         branch(tip, length.mul(p.attenuation.ref), angle.sub(p.deltaAngle.ref), depth - 1, `${name}r`);
       }
     }
-    branch(np.array([0, 120], { dtype: np.float64 }), p.startLength.ref, np.array([-90], { dtype: np.float64 }), 3, "");
-    shapes.root = point(np.array([0, 120], { dtype: np.float64 }));
+    branch(np.array([0, 120], { dtype: np.float32 }), p.startLength.ref, np.array([-90], { dtype: np.float32 }), 3, "");
+    shapes.root = point(np.array([0, 120], { dtype: np.float32 }));
     return shapes;
   };
 
