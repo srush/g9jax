@@ -1,5 +1,5 @@
 import { G9, point, line, np, jit } from "./g9";
-import { defaultDevice, init, vmap, devices } from "@jax-js/jax";
+import { defaultDevice, init, vmap, type Device } from "@jax-js/jax";
 
 function show(id: string) {
   const el = document.getElementById(id);
@@ -14,6 +14,10 @@ function hideBanner() {
 function setBanner(msg: string) {
   const el = document.getElementById("loading-banner");
   if (el) el.innerHTML = msg;
+}
+
+function nextFrame(): Promise<void> {
+  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
 }
 
 function runDemoFromTextarea(sectionId: string, canvasSelector: string) {
@@ -32,29 +36,38 @@ function runDemoFromTextarea(sectionId: string, canvasSelector: string) {
 async function main() {
   setBanner('<span class="spinner"></span> Initialising jax-js runtime…');
 
-  let backendName = "unknown";
+  let readyDevices: Device[] = [];
   try {
-    const backends = await init();
-    console.log("jax-js init complete, backends:", backends);
-    defaultDevice("cpu");
-    backendName = defaultDevice().toString();
-    console.log("jax-js default device forced to cpu");
+    readyDevices = await init();
+    console.log("jax-js init complete, devices:", readyDevices);
   } catch (e: any) {
     console.warn("jax-js full init failed, trying cpu-only:", e.message || e);
     try {
-      await init("cpu");
-      defaultDevice("cpu");
-      backendName = defaultDevice().toString();
-      console.log("jax-js cpu backend ready");
+      readyDevices = await init("cpu");
     } catch (e2: any) {
       console.warn("jax-js cpu init also failed:", e2.message || e2);
     }
   }
 
-  const backendEl = document.getElementById("backend-info");
-  if (backendEl) {
-    const allDevices = devices.map((d: any) => d.toString()).join(", ");
-    backendEl.textContent = `Backend: ${backendName} | Available: ${allDevices}`;
+  const preferred: Device[] = ["webgpu", "webgl", "cpu"];
+  const chosen = preferred.find((d) => readyDevices.includes(d)) ?? readyDevices[0];
+  defaultDevice(chosen);
+  console.log("jax-js default device:", chosen);
+
+  const select = document.getElementById("backend-select") as HTMLSelectElement | null;
+  if (select) {
+    select.innerHTML = "";
+    for (const d of readyDevices) {
+      const opt = document.createElement("option");
+      opt.value = d;
+      opt.textContent = d;
+      if (d === chosen) opt.selected = true;
+      select.appendChild(opt);
+    }
+    select.addEventListener("change", () => {
+      defaultDevice(select.value as any);
+      console.log("Backend switched to", defaultDevice().toString());
+    });
   }
 
   setBanner('<span class="spinner"></span> Rendering demos…');
@@ -65,7 +78,14 @@ async function main() {
     ["section-lines", "#demo-lines"],
     ["section-dragon", "#demo-dragon"],
     ["section-tree", "#demo-tree"],
-  ];
+  ] as const;
+
+  // Unhide first so layout/offsets settle before any G9 instance mounts.
+  for (const [sectionId] of demos) show(sectionId);
+
+  // Match the "Run" button path by mounting after layout has settled.
+  await nextFrame();
+  await nextFrame();
 
   for (const [sectionId, canvasSelector] of demos) {
     try {
