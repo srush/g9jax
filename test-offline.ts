@@ -98,7 +98,7 @@ run("point drag loss minimizes", () => {
   assert(Number.isFinite(xy[0]) && Number.isFinite(xy[1]), "point params should remain finite");
 });
 
-run("line-search mode toggle keeps optimization stable", () => {
+run("line-search mode keeps optimization stable", () => {
   const prev = getG9LineSearchEnabled();
   setG9LineSearchEnabled(true);
   try {
@@ -605,6 +605,7 @@ run("snake demo runs offline and supports repeated minimization", () => {
     (params: Record<string, any>) => {
       const pts: Record<string, any> = {};
       const turns = [params.r1, params.r2, params.r3, params.r4];
+      const jointAffects = [{ r1: true }, { r2: true }, { r3: true }, { r4: true }];
       const segmentLength = 36;
       let angle = np.array([0], { dtype: np.float32 });
       let head = np.concatenate([params.x.ref, params.y.ref]);
@@ -620,9 +621,13 @@ run("snake demo runs offline and supports repeated minimization", () => {
           stroke: "#1f2937",
           "stroke-width": 5 - i,
           "stroke-linecap": "round",
-          affects: { r1: true, r2: true, r3: true, r4: true },
+          affects: jointAffects[i],
         });
-        pts[`p${i + 1}`] = point(next.ref, { fill: "#0ea5e9", r: 5 });
+        pts[`p${i + 1}`] = point(next.ref, {
+          fill: "#0ea5e9",
+          r: 5,
+          affects: jointAffects[i],
+        });
         head = next;
       }
       return pts;
@@ -654,6 +659,70 @@ run("snake demo runs offline and supports repeated minimization", () => {
   assert(Number.isFinite(x) && Number.isFinite(y), "snake demo params should remain finite");
 });
 
+run("snake tiny line drag does not overshoot turn parameters", () => {
+  const params: ParamState[] = [
+    { name: "r1", value: np.array([6.2594], { dtype: np.float32 }) },
+    { name: "r2", value: np.array([12.5397], { dtype: np.float32 }) },
+    { name: "r3", value: np.array([12.708], { dtype: np.float32 }) },
+    { name: "r4", value: np.array([6.0184], { dtype: np.float32 }) },
+    { name: "x", value: np.array([84], { dtype: np.float32 }) },
+    { name: "y", value: np.array([12], { dtype: np.float32 }) },
+  ];
+
+  const renderFn = (p: any) => {
+    const pts: Record<string, any> = {};
+    const turns = [p.r1, p.r2, p.r3, p.r4];
+    const segmentLength = 36;
+    const lineAffects = [{ r1: true }, { r2: true }, { r3: true }, { r4: true }];
+    const pointAffects = [{ r1: true }, { r2: true }, { r3: true }, { r4: true }];
+    let angle = np.array([0], { dtype: np.float32 });
+    let head = np.concatenate([p.x.ref, p.y.ref]);
+    pts.p0 = point(head.ref, { affects: { x: true, y: true } });
+    for (let i = 0; i < turns.length; i++) {
+      angle = angle.ref.add(turns[i].ref);
+      const step = np.concatenate([
+        np.cos(angle.ref).mul(segmentLength),
+        np.sin(angle.ref).mul(segmentLength),
+      ]);
+      const next = head.ref.add(step.ref);
+      pts[`s${i}`] = line(np.concatenate([head.ref, next.ref]), { affects: lineAffects[i] });
+      pts[`p${i + 1}`] = point(next.ref, { affects: pointAffects[i] });
+      head = next;
+    }
+    return pts;
+  };
+
+  const p: Record<string, any> = {};
+  for (const ps of params) p[ps.name] = ps.value.ref;
+  const shapes = renderFn(p);
+  const s1 = toList(shapes.s1.c);
+  const cx = (s1[0] + s1[2]) / 2;
+  const cy = (s1[1] + s1[3]) / 2;
+  const ldx = s1[2] - s1[0];
+  const ldy = s1[3] - s1[1];
+  const ll2 = ldx * ldx + ldy * ldy;
+  const r = ll2 > 0 ? ((cx - s1[0]) * ldx + (cy - s1[1]) * ldy) / ll2 : 0;
+  const before = params.map((ps) => toList(ps.value)[0]);
+
+  const lineLoss = (target: any, coords: any) => {
+    const cv = coords.s1;
+    const fromPt = cv.ref.slice([0, 2]);
+    const toPt = cv.slice([2, 4]);
+    const dir = toPt.sub(fromPt.ref);
+    const rr = target.ref.slice([2, 3]);
+    const predicted = fromPt.add(dir.mul(rr));
+    const t = target.slice([0, 2]);
+    const d = predicted.sub(t);
+    return d.ref.mul(d).sum();
+  };
+
+  minimize(params, renderFn as any, lineLoss as any, [cx + 1, cy, r], { r2: true }, 5);
+  const after = params.map((ps) => toList(ps.value)[0]);
+  const deltas = after.map((v, i) => Math.abs(v - before[i]));
+  assert(deltas[1] < 0.02, `expected small r2 change for tiny drag, got ${deltas[1]}`);
+  assert(deltas[0] < 1e-6 && deltas[2] < 1e-6 && deltas[3] < 1e-6, "other turn params should not move");
+});
+
 run("tongs demo runs offline and supports repeated minimization", () => {
   const host = installFakeDom();
   const g9 = new G9(
@@ -676,6 +745,9 @@ run("tongs demo runs offline and supports repeated minimization", () => {
 
       for (let i = 0; i < 4; i++) {
         const dir = i % 2 === 0 ? -1 : 1;
+        const localAffects = i < 3
+          ? { b: true, dragIter: [1] }
+          : { a: true, dragIter: [1] };
         const nx = x.ref.add(np.cos(params.b.ref).mul(SEGMENT));
         const nyTop = yTop.ref.add(np.sin(params.b.ref).mul(SEGMENT * dir));
         const nyBottom = yBottom.ref.sub(np.sin(params.b.ref).mul(SEGMENT * dir));
@@ -689,14 +761,16 @@ run("tongs demo runs offline and supports repeated minimization", () => {
           stroke: "#111827",
           "stroke-width": 8,
           "stroke-linecap": "round",
+          affects: localAffects,
         });
         pts[`l${i}`] = line(np.concatenate([b0.ref, b1.ref]), {
           stroke: "#111827",
           "stroke-width": 8,
           "stroke-linecap": "round",
+          affects: localAffects,
         });
-        pts[`up${i}`] = point(a1.ref, { fill: "#0ea5e9", r: 4, affects: { a: true, b: true } });
-        pts[`lp${i}`] = point(b1.ref, { fill: "#0ea5e9", r: 4, affects: { a: true, b: true } });
+        pts[`up${i}`] = point(a1.ref, { fill: "#0ea5e9", r: 4, affects: localAffects });
+        pts[`lp${i}`] = point(b1.ref, { fill: "#0ea5e9", r: 4, affects: localAffects });
 
         x = nx;
         yTop = nyTop;
@@ -724,85 +798,87 @@ run("tongs demo runs offline and supports repeated minimization", () => {
   assert(Number.isFinite(a) && Number.isFinite(b), "tongs demo params should remain finite");
 });
 
-run("bezier demo runs offline and supports repeated minimization", () => {
-  const host = installFakeDom();
-  const g9 = new G9(
-    (params: Record<string, any>) => {
-      const pts: Record<string, any> = {};
-      const start = params.start;
-      const middle = params.middle;
-      const end = params.end;
-      const steps = 30;
-      const t = params.t;
+run("tongs tiny line drag does not overshoot parameters", () => {
+  const rotate = (xy: any, a: any) => {
+    const c = np.cos(a.ref);
+    const s = np.sin(a.ref);
+    const x = xy.ref.slice([0, 1]);
+    const y = xy.ref.slice([1, 2]);
+    const rx = c.ref.mul(x.ref).sub(s.ref.mul(y.ref));
+    const ry = s.ref.mul(x.ref).add(c.ref.mul(y.ref));
+    return np.concatenate([rx, ry]);
+  };
 
-      pts.ctrl1 = line(np.concatenate([start.ref, middle.ref]), { stroke: "rgba(0,0,0,0.25)" });
-      pts.ctrl2 = line(np.concatenate([middle.ref, end.ref]), { stroke: "rgba(0,0,0,0.25)" });
-      pts.pStart = point(start.ref, { fill: "#0ea5e9", r: 6 });
-      pts.pMiddle = point(middle.ref, { fill: "#f97316", r: 6 });
-      pts.pEnd = point(end.ref, { fill: "#0ea5e9", r: 6 });
+  const renderFn = (params: any) => {
+    const pts: Record<string, any> = {};
+    const SEGMENT = 68;
+    let x = np.array([0], { dtype: np.float32 });
+    let yTop = np.array([0], { dtype: np.float32 });
+    let yBottom = np.sin(params.b.ref).mul(-SEGMENT);
 
-      const curve = [];
-      for (let i = 0; i < steps; i++) {
-        const r = t.ref.mul(i / steps);
-        const oneMinus = np.array([1], { dtype: np.float32 }).sub(r.ref);
-        const a = start.ref.mul(oneMinus.ref).add(middle.ref.mul(r.ref));
-        const b = middle.ref.mul(oneMinus.ref).add(end.ref.mul(r.ref));
-        const c = a.ref.mul(oneMinus.ref).add(b.ref.mul(r.ref));
-        if (i % 4 === 0) {
-          pts[`step${i}`] = line(np.concatenate([a.ref, b.ref]), {
-            stroke: "rgba(0,0,0,0.12)",
-            affects: { t: true },
-          });
-        }
-        curve.push(c);
-      }
+    for (let i = 0; i < 4; i++) {
+      const dir = i % 2 === 0 ? -1 : 1;
+      const localAffects = i < 3
+        ? { b: true, dragIter: [1] }
+        : { a: true, dragIter: [1] };
+      const nx = x.ref.add(np.cos(params.b.ref).mul(SEGMENT));
+      const nyTop = yTop.ref.add(np.sin(params.b.ref).mul(SEGMENT * dir));
+      const nyBottom = yBottom.ref.sub(np.sin(params.b.ref).mul(SEGMENT * dir));
+      const a0 = rotate(np.concatenate([x.ref, yTop.ref]), params.a.ref);
+      const a1 = rotate(np.concatenate([nx.ref, nyTop.ref]), params.a.ref);
+      const b0 = rotate(np.concatenate([x.ref, yBottom.ref]), params.a.ref);
+      const b1 = rotate(np.concatenate([nx.ref, nyBottom.ref]), params.a.ref);
+      pts[`u${i}`] = line(np.concatenate([a0.ref, a1.ref]), { affects: localAffects });
+      pts[`l${i}`] = line(np.concatenate([b0.ref, b1.ref]), { affects: localAffects });
+      pts[`up${i}`] = point(a1.ref, { affects: localAffects });
+      pts[`lp${i}`] = point(b1.ref, { affects: localAffects });
+      x = nx;
+      yTop = nyTop;
+      yBottom = nyBottom;
+    }
+    return pts;
+  };
 
-      for (let i = 1; i < curve.length; i++) {
-        pts[`curve${i}`] = line(np.concatenate([curve[i - 1].ref, curve[i].ref]), {
-          stroke: "#111827",
-          "stroke-width": 4,
-          affects: { t: true },
-        });
-      }
-
-      const tY = np.array([140], { dtype: np.float32 });
-      const tX = t.ref.mul(240).sub(120);
-      pts.tAxis = line(np.array([-120, 140, 120, 140], { dtype: np.float32 }), {
-        stroke: "#94a3b8",
-        "stroke-width": 2,
-      });
-      pts.tKnob = point(np.concatenate([tX, tY]), {
-        fill: "#16a34a",
-        r: 7,
-        affects: { t: true },
-      });
-      return pts;
-    },
-    {
-      start: [-110, 62],
-      middle: [0, -150],
-      end: [130, 58],
-      t: [0.5],
-    },
-  );
-  g9.align("center", "center").insertInto(host as any);
+  const params: ParamState[] = [
+    { name: "a", value: np.array([0.3], { dtype: np.float32 }) },
+    { name: "b", value: np.array([0.85], { dtype: np.float32 }) },
+  ];
+  const pObj: Record<string, any> = {};
+  for (const p of params) pObj[p.name] = p.value.ref;
+  const shapes = renderFn(pObj);
+  const u2 = toList(shapes.u2.c);
+  const cx = (u2[0] + u2[2]) / 2;
+  const cy = (u2[1] + u2[3]) / 2;
+  const ldx = u2[2] - u2[0];
+  const ldy = u2[3] - u2[1];
+  const ll2 = ldx * ldx + ldy * ldy;
+  const r = ll2 > 0 ? ((cx - u2[0]) * ldx + (cy - u2[1]) * ldy) / ll2 : 0;
+  const before = params.map((p) => toList(p.value)[0]);
 
   const lossFn = (target: any, coords: any) => {
-    const d = coords.tKnob.sub(target);
+    const cv = coords.u2;
+    const fromPt = cv.ref.slice([0, 2]);
+    const toPt = cv.slice([2, 4]);
+    const dir = toPt.sub(fromPt.ref);
+    const rr = target.ref.slice([2, 3]);
+    const predicted = fromPt.add(dir.mul(rr));
+    const t = target.slice([0, 2]);
+    const d = predicted.sub(t);
     return d.ref.mul(d).sum();
   };
 
-  let cached: any = undefined;
-  for (const target of [[-96, 140], [96, 140], [24, 140]]) {
-    cached = minimize((g9 as any).params, (g9 as any).renderFn, lossFn, target, { t: true }, 8, cached);
-    g9.render();
-  }
-
-  const t = toList((g9 as any).params[3].value)[0];
-  assert(Number.isFinite(t), "bezier demo t parameter should remain finite");
+  minimize(params, renderFn as any, lossFn as any, [cx - 1, cy, r], { b: true, dragIter: [1] }, 1);
+  const after = params.map((p) => toList(p.value)[0]);
+  const deltaA = Math.abs(after[0] - before[0]);
+  const deltaB = Math.abs(after[1] - before[1]);
+  assert(deltaA < 1e-6, `a should stay fixed on u2 tiny drag, got ${deltaA}`);
+  assert(deltaB < 0.05, `b should move only slightly on tiny drag, got ${deltaB}`);
 });
 
 run("adaptive-step optimizer converges better with 8 iterations than 6", () => {
+  const prev = getG9LineSearchEnabled();
+  setG9LineSearchEnabled(false);
+  try {
   const SIDES = 8;
   const offsets: number[] = [];
   for (let i = 0; i < SIDES; i++) {
@@ -853,6 +929,9 @@ run("adaptive-step optimizer converges better with 8 iterations than 6", () => {
   const err8 = runWithIter(8);
   console.log(`convergence residual (6 vs 8 iters): ${err6.toFixed(4)} vs ${err8.toFixed(4)}`);
   assert(err8 < err6, `expected 8 iterations to converge better than 6 (${err8} !< ${err6})`);
+  } finally {
+    setG9LineSearchEnabled(prev);
+  }
 });
 
 console.log("All offline regression tests passed.");

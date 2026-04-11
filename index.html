@@ -276,10 +276,6 @@
       </select>
     </div>
     <label class="hero-toggle">
-      <input id="line-search-toggle" type="checkbox" />
-      Use old line search
-    </label>
-    <label class="hero-toggle">
       <input id="debug-drag-toggle" type="checkbox" />
       Debug drag targets
     </label>
@@ -518,6 +514,13 @@ return new G9((params) => {
   pts.p0 = point(head.ref, {fill: "#ef4444", r: 7, affects: {x: true, y: true}});
 
   for (let i = 0; i < turns.length; i++) {
+    const turnAffects = i === 0
+      ? {r1: true}
+      : i === 1
+        ? {r2: true}
+        : i === 2
+          ? {r3: true}
+          : {r4: true};
     angle = angle.ref.add(turns[i].ref);
     const step = np.concatenate([
       np.cos(angle.ref).mul(segmentLength),
@@ -528,9 +531,9 @@ return new G9((params) => {
       stroke: "#1f2937",
       "stroke-width": 5 - i,
       "stroke-linecap": "round",
-      affects: {r1: true, r2: true, r3: true, r4: true},
+      affects: turnAffects,
     });
-    pts["p" + (i + 1)] = point(next.ref, {fill: "#0ea5e9", r: 5});
+    pts["p" + (i + 1)] = point(next.ref, {fill: "#0ea5e9", r: 5, affects: turnAffects});
     head = next;
   }
   return pts;
@@ -577,6 +580,9 @@ return new G9((params) => {
 
   for (let i = 0; i < 4; i++) {
     const dir = i % 2 === 0 ? -1 : 1;
+    const localAffects = i < 3
+      ? {b: true, dragIter: [1]}
+      : {a: true, dragIter: [1]};
     const nx = x.ref.add(np.cos(params.b.ref).mul(SEGMENT));
     const nyTop = yTop.ref.add(np.sin(params.b.ref).mul(SEGMENT * dir));
     const nyBottom = yBottom.ref.sub(np.sin(params.b.ref).mul(SEGMENT * dir));
@@ -590,14 +596,16 @@ return new G9((params) => {
       stroke: "#111827",
       "stroke-width": 8,
       "stroke-linecap": "round",
+      affects: localAffects,
     });
     pts["l" + i] = line(np.concatenate([b0.ref, b1.ref]), {
       stroke: "#111827",
       "stroke-width": 8,
       "stroke-linecap": "round",
+      affects: localAffects,
     });
-    pts["up" + i] = point(a1.ref, {fill: "#0ea5e9", r: 4, affects: {a: true, b: true}});
-    pts["lp" + i] = point(b1.ref, {fill: "#0ea5e9", r: 4, affects: {a: true, b: true}});
+    pts["up" + i] = point(a1.ref, {fill: "#0ea5e9", r: 4, affects: localAffects});
+    pts["lp" + i] = point(b1.ref, {fill: "#0ea5e9", r: 4, affects: localAffects});
 
     x = nx;
     yTop = nyTop;
@@ -605,85 +613,6 @@ return new G9((params) => {
   }
   return pts;
 }, {a: [0.3], b: [0.85]});</textarea>
-        <button class="run-btn">Run ▶</button>
-        <div class="error-msg"></div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Demo: Bezier -->
-  <div class="demo-section" id="section-bezier" style="display:none">
-    <h2>Bezier</h2>
-    <p class="desc">De Casteljau construction with draggable control points.</p>
-    <div class="demo-card">
-      <div class="demo-loss" id="loss-demo-bezier">
-        <span>Loss</span><span class="loss-value">—</span>
-      </div>
-      <div class="demo-canvas" id="demo-bezier"></div>
-      <div class="demo-code" data-target="#demo-bezier">
-        <textarea>return new G9((params) => {
-  const pts = {};
-  const steps = 30;
-  const startX = params.start.ref.slice([0, 1]);
-  const startY = params.start.ref.slice([1, 2]);
-  const middleX = params.middle.ref.slice([0, 1]);
-  const middleY = params.middle.ref.slice([1, 2]);
-  const endX = params.end.ref.slice([0, 1]);
-  const endY = params.end.ref.slice([1, 2]);
-
-  pts.ctrl1 = line(np.concatenate([params.start.ref, params.middle.ref]), {stroke: "rgba(0,0,0,0.25)"});
-  pts.ctrl2 = line(np.concatenate([params.middle.ref, params.end.ref]), {stroke: "rgba(0,0,0,0.25)"});
-  pts.pStart = point(params.start.ref, {fill: "#0ea5e9", r: 6});
-  pts.pMiddle = point(params.middle.ref, {fill: "#f97316", r: 6});
-  pts.pEnd = point(params.end.ref, {fill: "#0ea5e9", r: 6});
-
-  let prevCurve = null;
-  for (let i = 0; i < steps; i++) {
-    const r = params.t.ref.mul(i / steps);
-    const oneMinus = np.array([1], {dtype: np.float32}).sub(r.ref);
-    const ax = startX.ref.mul(oneMinus.ref).add(middleX.ref.mul(r.ref));
-    const ay = startY.ref.mul(oneMinus.ref).add(middleY.ref.mul(r.ref));
-    const bx = middleX.ref.mul(oneMinus.ref).add(endX.ref.mul(r.ref));
-    const by = middleY.ref.mul(oneMinus.ref).add(endY.ref.mul(r.ref));
-    const a = np.concatenate([ax, ay]);
-    const b = np.concatenate([bx, by]);
-    const cx = ax.ref.mul(oneMinus.ref).add(bx.ref.mul(r.ref));
-    const cy = ay.ref.mul(oneMinus.ref).add(by.ref.mul(r.ref));
-    const curvePoint = np.concatenate([cx, cy]);
-    if (i % 4 === 0) {
-      pts["step" + i] = line(np.concatenate([a.ref, b.ref]), {
-        stroke: "rgba(0,0,0,0.12)",
-        affects: {t: true},
-      });
-    }
-    if (prevCurve) {
-      pts["curve" + i] = line(np.concatenate([prevCurve.ref, curvePoint.ref]), {
-        stroke: "#111827",
-        "stroke-width": 4,
-        affects: {t: true},
-      });
-    }
-    prevCurve = curvePoint;
-  }
-
-  const tY = np.array([140], {dtype: np.float32});
-  const tX = params.t.ref.mul(240).sub(120);
-  pts.tAxis = line(np.array([-120, 140, 120, 140], {dtype: np.float32}), {
-    stroke: "#94a3b8",
-    "stroke-width": 2,
-  });
-  pts.tKnob = point(np.concatenate([tX, tY]), {
-    fill: "#16a34a",
-    r: 7,
-    affects: {t: true},
-  });
-  return pts;
-}, {
-  start: [-110, 62],
-  middle: [0, -150],
-  end: [130, 58],
-  t: [0.5],
-});</textarea>
         <button class="run-btn">Run ▶</button>
         <div class="error-msg"></div>
       </div>

@@ -57,12 +57,12 @@ export function line(
 const SVG_NS = "http://www.w3.org/2000/svg";
 const MOBILE_POINT_RADIUS_SCALE = 1.35;
 const DRAG_ITER_ADAPTIVE = 10;
-const DRAG_ITER_LINE_SEARCH = 18;
+const DRAG_ITER_LINE_SEARCH = 5;
 const LINE_SEARCH_TRIALS = 12;
 const DRAG_RENDER_EVERY = 2;
 let activeDragCount = 0;
 let dragDebugEnabled = false;
-let lineSearchEnabled = false;
+let lineSearchEnabled = true;
 const liveG9Instances = new Set<G9>();
 const debugLossStats = {
   sum: 0,
@@ -1109,6 +1109,18 @@ export class G9 {
     const jitBatchLoss = jit(vmap(combinedFn, [0]));
     runtimeStats.warmupBuilds += 1;
     jitRender(np.array(x, { dtype: np.float32 }));
+    const totalLen = tLen + dim;
+    const warmupCombined = new Float32Array(totalLen);
+    for (let i = 0; i < tLen; i++) warmupCombined[i] = target[i] ?? 0;
+    for (let i = 0; i < dim; i++) warmupCombined[tLen + i] = x[i];
+    jitLoss(np.array(warmupCombined, { dtype: np.float32 }));
+    jitGrad(np.array(warmupCombined, { dtype: np.float32 }));
+    const warmupBatch = new Float32Array(totalLen * LINE_SEARCH_TRIALS);
+    for (let ls = 0; ls < LINE_SEARCH_TRIALS; ls++) {
+      const row = ls * totalLen;
+      for (let i = 0; i < totalLen; i++) warmupBatch[row + i] = warmupCombined[i];
+    }
+    jitBatchLoss(np.array(warmupBatch, { dtype: np.float32 }).reshape([LINE_SEARCH_TRIALS, totalLen]));
     return {
       jitLoss,
       jitGrad,
