@@ -33,6 +33,8 @@ function runDemoFromTextarea(sectionId: string, canvasSelector: string) {
   }
 }
 
+(window as any).__runDemoFromTextarea = runDemoFromTextarea;
+
 async function main() {
   setBanner('<span class="spinner"></span> Initialising jax-js runtime…');
 

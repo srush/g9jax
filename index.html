@@ -398,48 +398,5 @@ return new G9((params) => {
 </footer>
 
 <script type="module" src="/src/main.ts"></script>
-<script type="module">
-import { G9, point, line, np, jit } from "/src/g9.ts";
-import { vmap } from "@jax-js/jax";
-
-function runDemo(codeEl) {
-  const textarea = codeEl.querySelector("textarea");
-  const errorDiv = codeEl.querySelector(".error-msg");
-  const target = codeEl.dataset.target;
-  const canvas = document.querySelector(target);
-  if (!textarea || !canvas) return;
-
-  errorDiv.textContent = "";
-  try {
-    const fn = new Function("G9","point","line","np","jit","vmap", textarea.value);
-    const g9 = fn(G9, point, line, np, jit, vmap);
-    if (g9 instanceof G9) {
-      g9.align("center", "center").insertInto(target);
-    }
-  } catch (e) {
-    errorDiv.textContent = e.message;
-  }
-}
-
-document.querySelectorAll(".demo-code .run-btn").forEach((btn) => {
-  btn.addEventListener("click", () => runDemo(btn.closest(".demo-code")));
-});
-
-document.querySelectorAll(".demo-code textarea").forEach((ta) => {
-  ta.addEventListener("keydown", (e) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-      e.preventDefault();
-      runDemo(ta.closest(".demo-code"));
-    }
-    if (e.key === "Tab") {
-      e.preventDefault();
-      const start = ta.selectionStart;
-      const end = ta.selectionEnd;
-      ta.value = ta.value.substring(0, start) + "  " + ta.value.substring(end);
-      ta.selectionStart = ta.selectionEnd = start + 2;
-    }
-  });
-});
-</script>
 </body>
 </html>
