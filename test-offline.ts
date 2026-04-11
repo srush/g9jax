@@ -1,5 +1,5 @@
 import { numpy as np, vmap } from "@jax-js/jax";
-import { G9, minimize, point, line } from "./src/g9";
+import { G9, minimize, point, line, getG9RuntimeStats, resetG9RuntimeStats } from "./src/g9";
 
 if (typeof (globalThis as { Float16Array?: typeof Float32Array }).Float16Array === "undefined") {
   (globalThis as { Float16Array: typeof Float32Array }).Float16Array = Float32Array;
@@ -253,6 +253,33 @@ run("rings radius can repeatedly shrink", () => {
   }
   const radius = toList(params[0].value)[0];
   assert(radius <= 60.5, `radius should shrink to near target, got ${radius}`);
+});
+
+run("jit cache is reused across repeated minimizations", () => {
+  resetG9RuntimeStats();
+  const params: ParamState[] = [
+    { name: "xy", value: np.array([40, 0], { dtype: np.float32 }) },
+  ];
+  const renderFn = (p: any) => {
+    const xy = p.xy;
+    const flip = np.array([[0, 1], [1, 0]], { dtype: np.float32 });
+    const p2 = np.dot(flip, xy.ref);
+    return { p1: point(xy), p2: point(p2) };
+  };
+  const lossFn = (target: any, coords: any) => {
+    const d = coords.p1.sub(target);
+    return d.ref.mul(d).sum();
+  };
+
+  let cached: any = undefined;
+  for (let i = 0; i < 12; i++) {
+    cached = minimize(params, renderFn, lossFn, [60 + i, 10], null, 8, cached);
+  }
+
+  const stats = getG9RuntimeStats();
+  assert(stats.minimizeCalls >= 12, "expected repeated minimize calls");
+  assert(stats.jitBuilds === 1, `expected one jit build, got ${stats.jitBuilds}`);
+  assert(stats.jitCacheHits >= 10, `expected cache hits, got ${stats.jitCacheHits}`);
 });
 
 run("dragon render survives optimization path", () => {

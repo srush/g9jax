@@ -7,6 +7,31 @@ type RenderFn = (
   params: Record<string, any>,
 ) => Record<string, ShapeArgs>;
 
+type RuntimeStats = {
+  minimizeCalls: number;
+  jitBuilds: number;
+  jitCacheHits: number;
+  warmupBuilds: number;
+};
+
+const runtimeStats: RuntimeStats = {
+  minimizeCalls: 0,
+  jitBuilds: 0,
+  jitCacheHits: 0,
+  warmupBuilds: 0,
+};
+
+export function getG9RuntimeStats(): RuntimeStats {
+  return { ...runtimeStats };
+}
+
+export function resetG9RuntimeStats(): void {
+  runtimeStats.minimizeCalls = 0;
+  runtimeStats.jitBuilds = 0;
+  runtimeStats.jitCacheHits = 0;
+  runtimeStats.warmupBuilds = 0;
+}
+
 // ---------------------------------------------------------------------------
 // Shape helpers
 // ---------------------------------------------------------------------------
@@ -35,6 +60,12 @@ function setAttrs(el: Element, attrs: Record<string, any>): void {
   for (const [k, v] of Object.entries(attrs)) {
     if (v != null) el.setAttributeNS(null, k, String(v));
   }
+}
+
+function markDraggable(el: SVGElement): void {
+  el.style.touchAction = "none";
+  el.style.userSelect = "none";
+  (el.style as any).webkitUserSelect = "none";
 }
 
 function toJS(x: any): any {
@@ -135,6 +166,7 @@ export function minimize(
   maxIter = 30,
   cached?: CachedJit,
 ): CachedJit {
+  runtimeStats.minimizeCalls += 1;
   const sizes = params.map((p) => p.value.shape[0]);
   const paramNames = params.map((p) => p.name);
   const dim = sizes.reduce((a, b) => a + b, 0);
@@ -145,6 +177,7 @@ export function minimize(
   let jitLoss: any, jitGrad: any, jitRender: any;
   let renderIds: string[] = cached?.renderIds ?? [];
   if (cached && cached.targetLen === tLen) {
+    runtimeStats.jitCacheHits += 1;
     jitLoss = cached.jitLoss;
     jitGrad = cached.jitGrad;
     jitRender = cached.jitRender;
@@ -184,6 +217,7 @@ export function minimize(
     jitLoss = jit(combinedFn);
     jitGrad = jit(jacfwd(combinedFn));
     jitRender = jit(renderOnlyFn);
+    runtimeStats.jitBuilds += 1;
     const probeX: number[] = [];
     for (const p of params) for (const v of toJSArr(p.value.ref)) probeX.push(v);
     jitRender(np.array(probeX, { dtype: np.float32 }));
@@ -271,6 +305,7 @@ class PointEl {
     this.g9 = g9;
     this.el = document.createElementNS(SVG_NS, "circle");
     setAttrs(this.el, { id, r: 5, fill: "#333", cursor: "grab" });
+    markDraggable(this.el);
     container.appendChild(this.el);
 
     const lossFn: LossFn = (target, coords) => {
@@ -332,6 +367,7 @@ class LineEl {
     this.g9 = g9;
     this.el = document.createElementNS(SVG_NS, "line");
     setAttrs(this.el, { id, stroke: "#000", "stroke-width": 2, cursor: "grab" });
+    markDraggable(this.el);
     container.appendChild(this.el);
 
     const lossFn: LossFn = (target, coords) => {
@@ -393,6 +429,20 @@ function addDrag(
   el: SVGElement,
   onStartCb: (event: MouseEvent | Touch) => (dx: number, dy: number) => void,
 ): void {
+  const scheduleFrame = (cb: () => void): number => {
+    if (typeof requestAnimationFrame === "function") {
+      return requestAnimationFrame(() => cb());
+    }
+    return setTimeout(cb, 0) as unknown as number;
+  };
+  const cancelFrame = (id: number): void => {
+    if (typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(id);
+    } else {
+      clearTimeout(id);
+    }
+  };
+
   function firstPointer(event: MouseEvent | TouchEvent): MouseEvent | Touch {
     return "touches" in event ? event.touches[0] : event;
   }
@@ -403,14 +453,31 @@ function addDrag(
     const f = firstPointer(e);
     const onDrag = onStartCb(f);
     const sx = f.clientX, sy = f.clientY;
+    let latestDx = 0;
+    let latestDy = 0;
+    let rafId = 0;
+
+    const flush = () => {
+      rafId = 0;
+      onDrag(latestDx, latestDy);
+    };
 
     function move(ev: MouseEvent | TouchEvent) {
       ev.preventDefault();
       const m = firstPointer(ev);
-      onDrag(m.clientX - sx, m.clientY - sy);
+      latestDx = m.clientX - sx;
+      latestDy = m.clientY - sy;
+      if (rafId === 0) {
+        rafId = scheduleFrame(flush);
+      }
     }
     function end(ev: MouseEvent | TouchEvent) {
       ev.preventDefault();
+      if (rafId !== 0) {
+        cancelFrame(rafId);
+        rafId = 0;
+        onDrag(latestDx, latestDy);
+      }
       document.removeEventListener("mousemove", move);
       document.removeEventListener("touchmove", move);
       document.removeEventListener("mouseup", end);
@@ -545,6 +612,7 @@ export class G9 {
     const jitLoss = jit(combinedFn);
     const jitGrad = jit(jacfwd(combinedFn));
     const jitRender = jit(renderOnlyFn);
+    runtimeStats.warmupBuilds += 1;
     jitRender(np.array(x, { dtype: np.float32 }));
     return { jitLoss, jitGrad, jitRender, renderIds, targetLen: tLen, lastX: x };
   }
