@@ -268,8 +268,7 @@ class PointEl {
       const d = coords[id].sub(target);
       return d.ref.mul(d).sum();
     };
-    if (!g9._pointCache) g9._pointCache = g9._warmup(lossFn, [0, 0]);
-    this._cached = g9._pointCache;
+    this._cached = g9._warmup(lossFn, [0, 0]);
 
     addDrag(this.el, (_evt) => {
       const c0 = this._cachedCoords;
@@ -337,8 +336,7 @@ class LineEl {
       const d = predicted.sub(t);
       return d.ref.mul(d).sum();
     };
-    if (!g9._lineCache) g9._lineCache = g9._warmup(lossFn, [0, 0, 0]);
-    this._cached = g9._lineCache;
+    this._cached = g9._warmup(lossFn, [0, 0, 0]);
 
     addDrag(this.el, (evt) => {
       const c = this._cachedCoords;
@@ -489,9 +487,6 @@ export class G9 {
     this.resize();
     return this;
   }
-
-  _pointCache?: CachedJit;
-  _lineCache?: CachedJit;
 
   _warmup(lossFn: LossFn, target: number[]): CachedJit {
     const sizes = this.params.map((p) => p.value.shape[0]);
