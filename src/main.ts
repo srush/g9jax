@@ -22,9 +22,17 @@ function hideBanner() {
   if (el) el.style.display = "none";
 }
 
-function setBanner(msg: string) {
+function setBanner(msg: string, showSpinner = false) {
   const el = document.getElementById("loading-banner");
-  if (el) el.innerHTML = msg;
+  if (!(el instanceof HTMLElement)) return;
+  el.textContent = "";
+  if (showSpinner) {
+    const spinner = document.createElement("span");
+    spinner.className = "spinner";
+    el.appendChild(spinner);
+    el.appendChild(document.createTextNode(" "));
+  }
+  el.appendChild(document.createTextNode(msg));
 }
 
 function updateDemoLoss(card: Element | null, loss: number | null): void {
@@ -42,6 +50,7 @@ function nextFrame(): Promise<void> {
 }
 
 const demoMountState = new Map<string, G9>();
+const queuedDemoTargets = new Set<string>();
 
 function runDemoFromTextarea(sectionId: string, canvasSelector: string) {
   const section = document.getElementById(sectionId);
@@ -117,6 +126,7 @@ function bindDebugControls(): void {
   const debugBox = document.getElementById("debug-stats-box");
   const avgLossValue = document.getElementById("avg-opt-loss-value");
   const avgLossCount = document.getElementById("avg-opt-loss-count");
+  let statsTimer: number | null = null;
 
   const renderDebugStats = () => {
     const debugEnabled = debugToggle?.checked ?? false;
@@ -139,6 +149,12 @@ function bindDebugControls(): void {
     debugToggle.addEventListener("change", () => {
       setG9DragDebugEnabled(debugToggle.checked);
       renderDebugStats();
+      if (debugToggle.checked) {
+        if (statsTimer == null) statsTimer = window.setInterval(renderDebugStats, 200);
+      } else if (statsTimer != null) {
+        window.clearInterval(statsTimer);
+        statsTimer = null;
+      }
     });
   }
 
@@ -150,13 +166,107 @@ function bindDebugControls(): void {
   }
 
   renderDebugStats();
-  window.setInterval(renderDebugStats, 200);
+  if (debugToggle?.checked) statsTimer = window.setInterval(renderDebugStats, 200);
 }
 (window as any).__g9SetDragDebugEnabled = setG9DragDebugEnabled;
 (window as any).__g9GetDragDebugEnabled = getG9DragDebugEnabled;
 
+type DemoSpec = { sectionId: string; canvasSelector: string };
+
+function isDragActive(): boolean {
+  return document.documentElement?.classList.contains("g9-dragging") ?? false;
+}
+
+function setupDemoLazyMount(demos: readonly DemoSpec[]): void {
+  const bySection = new Map<string, DemoSpec>();
+  for (const demo of demos) {
+    bySection.set(demo.sectionId, demo);
+    const section = document.getElementById(demo.sectionId);
+    if (section) section.dataset.demoTarget = demo.canvasSelector;
+  }
+
+  const queue: DemoSpec[] = [];
+  const deferred: DemoSpec[] = [];
+  let draining = false;
+  let autoMountReady = false;
+
+  const enqueueDemo = (demo: DemoSpec) => {
+    if (demoMountState.has(demo.canvasSelector)) return;
+    if (queuedDemoTargets.has(demo.canvasSelector)) return;
+    queuedDemoTargets.add(demo.canvasSelector);
+    queue.push(demo);
+    void drainQueue();
+  };
+
+  const enableAutoMount = () => {
+    if (autoMountReady) return;
+    autoMountReady = true;
+    for (const demo of deferred.splice(0, deferred.length)) enqueueDemo(demo);
+  };
+
+  const installAutoMountGate = () => {
+    window.addEventListener("scroll", enableAutoMount, { passive: true, once: true });
+    window.addEventListener("wheel", enableAutoMount, { passive: true, once: true });
+    window.addEventListener("touchmove", enableAutoMount, { passive: true, once: true });
+    window.addEventListener("keydown", enableAutoMount, { once: true });
+  };
+
+  const drainQueue = async () => {
+    if (draining) return;
+    draining = true;
+    while (queue.length > 0) {
+      if (isDragActive()) {
+        await nextFrame();
+        continue;
+      }
+      const demo = queue.shift();
+      if (!demo) continue;
+      queuedDemoTargets.delete(demo.canvasSelector);
+      if (demoMountState.has(demo.canvasSelector)) continue;
+      try {
+        runDemoFromTextarea(demo.sectionId, demo.canvasSelector);
+        console.log(`${demo.sectionId} lazy mounted`);
+      } catch (error) {
+        console.error(`${demo.sectionId} lazy mount failed:`, error);
+      }
+      await nextFrame();
+    }
+    draining = false;
+  };
+
+  if (typeof IntersectionObserver === "undefined") return;
+
+  const observer = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      const target = entry.target;
+      const sectionId = target instanceof HTMLElement ? target.id : "";
+      if (!sectionId) continue;
+      const demo = bySection.get(sectionId);
+      if (!demo) continue;
+      observer.unobserve(target);
+      if (autoMountReady) {
+        enqueueDemo(demo);
+      } else {
+        deferred.push(demo);
+      }
+    }
+  }, {
+    root: null,
+    rootMargin: "100px 0px",
+    threshold: 0.01,
+  });
+
+  for (const demo of demos) {
+    const section = document.getElementById(demo.sectionId);
+    if (section) observer.observe(section);
+  }
+
+  installAutoMountGate();
+}
+
 async function main() {
-  setBanner('<span class="spinner"></span> Initialising jax-js runtime…');
+  setBanner("Initialising jax-js runtime…", true);
 
   let readyDevices: Device[] = [];
   try {
@@ -196,7 +306,7 @@ async function main() {
   bindDemoLossRows();
   bindDebugControls();
 
-  const demos = [
+  const demos: DemoSpec[] = [
     ["section-points", "#demo-points"],
     ["section-rings", "#demo-rings"],
     ["section-lines", "#demo-lines"],
@@ -205,46 +315,21 @@ async function main() {
     ["section-snake", "#demo-snake"],
     ["section-tongs", "#demo-tongs"],
     ["section-bezier", "#demo-bezier"],
-  ] as const;
+  ].map(([sectionId, canvasSelector]) => ({ sectionId, canvasSelector }));
 
   // Unhide sections first for layout consistency.
-  for (const [sectionId] of demos) show(sectionId);
+  for (const { sectionId } of demos) show(sectionId);
 
-  // Render one demo immediately, then mount the rest progressively.
+  // Render one demo immediately so first interaction is responsive.
   await nextFrame();
   await nextFrame();
 
-  const [firstSectionId, firstCanvas] = demos[0];
-  runDemoFromTextarea(firstSectionId, firstCanvas);
+  const firstDemo = demos[0];
+  runDemoFromTextarea(firstDemo.sectionId, firstDemo.canvasSelector);
   hideBanner();
-  console.log(`${firstSectionId} OK`);
+  console.log(`${firstDemo.sectionId} ready`);
 
-  const mountRemaining = async () => {
-    await nextFrame();
-    for (let i = 1; i < demos.length; i++) {
-      const [sectionId, canvasSelector] = demos[i];
-      try {
-        runDemoFromTextarea(sectionId, canvasSelector);
-        console.log(`${sectionId} OK`);
-      } catch (e) {
-        console.error(`${sectionId} failed:`, e);
-      }
-      await nextFrame();
-    }
-    console.log("All demos rendered");
-  };
-
-  void mountRemaining();
-
-  for (let i = 1; i < demos.length; i++) {
-    const [sectionId, canvasSelector] = demos[i];
-    try {
-      const section = document.getElementById(sectionId);
-      if (section) section.dataset.demoTarget = canvasSelector;
-    } catch (e) {
-      console.error(`${sectionId} failed:`, e);
-    }
-  }
+  setupDemoLazyMount(demos.slice(1));
 }
 
 main().catch((err) => {
