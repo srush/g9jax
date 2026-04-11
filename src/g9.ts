@@ -135,6 +135,18 @@ export function getG9DebugLossStats(): { average: number; count: number; last: n
   };
 }
 
+type LossListener = (loss: number | null) => void;
+const g9LossListeners = new Set<LossListener>();
+
+export function onG9LossUpdate(listener: LossListener): () => void {
+  g9LossListeners.add(listener);
+  return () => g9LossListeners.delete(listener);
+}
+
+function emitG9Loss(loss: number | null): void {
+  for (const listener of g9LossListeners) listener(loss);
+}
+
 function markDraggable(el: SVGElement): void {
   el.style.touchAction = "none";
   el.style.userSelect = "none";
@@ -163,6 +175,13 @@ function toJSArr(arr: any): number[] {
 function evalLoss(jitLoss: any, targetLen: number, x: number[], combinedBuffer: Float32Array): number {
   for (let i = 0; i < x.length; i++) combinedBuffer[targetLen + i] = x[i];
   return Number(toJS(jitLoss(np.array(combinedBuffer, { dtype: np.float32 }))));
+}
+
+function emitOptimizeLoss(containerId: string | null, loss: number): void {
+  if (!containerId || typeof document === "undefined" || !Number.isFinite(loss)) return;
+  document.dispatchEvent(new CustomEvent("g9:opt-loss", {
+    detail: { containerId, loss },
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -247,6 +266,7 @@ type CachedJit = {
   renderIds: string[];
   targetLen: number;
   lastX: number[];
+  lastLoss: number;
   affectsRef: Record<string, any> | null | undefined;
   affectsMask: Float64Array | null;
   combinedBuffer: Float32Array;
@@ -278,6 +298,7 @@ export function minimize(
       jitRender: null,
       renderIds: [],
       targetLen: 0,
+      lastLoss: 0,
       lastX: [],
       affectsRef: null,
       affectsMask: null,
@@ -367,6 +388,7 @@ export function minimize(
       jitRender,
       renderIds,
       targetLen: tLen,
+      lastLoss: cached?.lastLoss ?? 0,
       lastX: [],
       affectsRef: null,
       affectsMask: null,
@@ -443,13 +465,11 @@ export function minimize(
     }
   }
 
-  if (dragDebugEnabled) {
-    const loss = evalLoss(jitLoss, tLen, x, combinedBuffer);
-    if (Number.isFinite(loss)) {
-      debugLossStats.sum += loss;
-      debugLossStats.count += 1;
-      debugLossStats.last = loss;
-    }
+  const loss = evalLoss(jitLoss, tLen, x, combinedBuffer);
+  if (dragDebugEnabled && Number.isFinite(loss)) {
+    debugLossStats.sum += loss;
+    debugLossStats.count += 1;
+    debugLossStats.last = loss;
   }
 
   writeVec(params, sizes, x);
@@ -459,6 +479,7 @@ export function minimize(
     jitRender,
     renderIds,
     targetLen: tLen,
+    lastLoss: Number.isFinite(loss) ? loss : 0,
     lastX: x,
     affectsRef: affects,
     affectsMask,
@@ -744,6 +765,7 @@ export class G9 {
   elements: Record<string, PointEl | LineEl>;
   node: SVGSVGElement;
   parent: Element | null;
+  containerId: string | null;
   xAlign: string;
   yAlign: string;
   xOff: number;
@@ -769,6 +791,7 @@ export class G9 {
     this.node.style.height = "100%";
     this.node.style.overflow = "visible";
     this.parent = null;
+    this.containerId = null;
     this.xAlign = "center";
     this.yAlign = "center";
     this.xOff = 0;
@@ -855,6 +878,7 @@ export class G9 {
 
   insertInto(sel: string | Element): this {
     this.parent = typeof sel === "string" ? document.querySelector(sel) : sel;
+    this.containerId = typeof sel === "string" && sel.startsWith("#") ? sel.slice(1) : null;
     this.parent.textContent = "";
     this.parent.appendChild(this.node);
     const h = () => this.resize();
@@ -925,6 +949,7 @@ export class G9 {
       renderIds,
       targetLen: tLen,
       lastX: x,
+      lastLoss: 0,
       affectsRef: null,
       affectsMask: null,
       combinedBuffer: new Float32Array(tLen + dim),
@@ -946,6 +971,7 @@ export class G9 {
   ): CachedJit {
     const dragIterations = lineSearchEnabled ? DRAG_ITER_LINE_SEARCH : DRAG_ITER_ADAPTIVE;
     const c = minimize(this.params, this.renderFn, lossFn, target, affects, dragIterations, cached);
+    emitOptimizeLoss(this.containerId, c.lastLoss);
     this._dragRenderCounter += 1;
     if (forceRender || this._dragRenderCounter % DRAG_RENDER_EVERY === 0) {
       this._renderFast(c);

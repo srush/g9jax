@@ -256,6 +256,36 @@ run("debug mode tracks average optimization loss", () => {
   }
 });
 
+run("optimize loss event includes container id and finite loss", () => {
+  const events: Array<{ containerId: string; loss: number }> = [];
+  const listeners = new Map<string, (event: any) => void>();
+  const host = installFakeDom();
+  (globalThis as any).document.addEventListener = (name: string, cb: (event: any) => void) => {
+    listeners.set(name, cb);
+  };
+  (globalThis as any).document.dispatchEvent = (event: { type: string; detail: any }) => {
+    if (event.type === "g9:opt-loss") events.push(event.detail);
+    const listener = listeners.get(event.type);
+    if (listener) listener(event);
+    return true;
+  };
+
+  const g9 = new G9(
+    (params: Record<string, any>) => ({ p1: point(params.xy) }),
+    { xy: [40, 0] },
+  );
+  g9.align("center", "center").insertInto("#demo-points");
+  const lossFn = (target: any, coords: any) => {
+    const d = coords.p1.sub(target);
+    return d.ref.mul(d).sum();
+  };
+
+  (g9 as any)._minimize("p1", lossFn, [52, 14], null, true, undefined);
+  assert(events.length > 0, "expected optimize loss events");
+  assert(events.some((e) => e.containerId === "demo-points"), "expected container id in optimize loss event");
+  assert(events.every((e) => Number.isFinite(e.loss)), "expected finite optimize loss values in events");
+});
+
 run("basic example render path works exactly as in main.ts", () => {
   const xy = np.array([40, 0], { dtype: np.float32 });
   const render = (params: { xy: any }) => {
