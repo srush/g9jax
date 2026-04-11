@@ -72,16 +72,20 @@ async function main() {
 
   setBanner('<span class="spinner"></span> Rendering demos…');
 
-  // Match the "Run" button path by mounting after layout has settled.
-  await nextFrame();
-
   const demos = [
     ["section-points", "#demo-points"],
     ["section-rings", "#demo-rings"],
     ["section-lines", "#demo-lines"],
     ["section-dragon", "#demo-dragon"],
     ["section-tree", "#demo-tree"],
-  ];
+  ] as const;
+
+  // Unhide first so layout/offsets settle before any G9 instance mounts.
+  for (const [sectionId] of demos) show(sectionId);
+
+  // Match the "Run" button path by mounting after layout has settled.
+  await nextFrame();
+  await nextFrame();
 
   for (const [sectionId, canvasSelector] of demos) {
     try {
