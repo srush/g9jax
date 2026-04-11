@@ -139,8 +139,6 @@ export function minimize(
   const paramNames = params.map((p) => p.name);
   const dim = sizes.reduce((a, b) => a + b, 0);
   if (dim === 0) return cached ?? { jitLoss: null, jitGrad: null, jitRender: null, renderIds: [], targetLen: 0, lastX: [] };
-  const mask = buildAffectsMask(params, sizes, affects);
-  let x = readVec(params);
 
   const tLen = target.length;
 
@@ -186,12 +184,17 @@ export function minimize(
     jitLoss = jit(combinedFn);
     jitGrad = jit(jacfwd(combinedFn));
     jitRender = jit(renderOnlyFn);
-    jitRender(np.array(x, { dtype: np.float64 }));
+    const probeX: number[] = [];
+    for (const p of params) for (const v of toJSArr(p.value.ref)) probeX.push(v);
+    jitRender(np.array(probeX, { dtype: np.float64 }));
   }
 
   if (maxIter === 0) {
-    return { jitLoss, jitGrad, jitRender, renderIds, targetLen: tLen, lastX: x };
+    return { jitLoss, jitGrad, jitRender, renderIds, targetLen: tLen, lastX: [] };
   }
+
+  const mask = buildAffectsMask(params, sizes, affects);
+  let x = readVec(params);
 
   for (let it = 0; it < maxIter; it++) {
     const combined = np.array([...target, ...x], { dtype: np.float64 });
