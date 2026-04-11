@@ -276,10 +276,6 @@
       </select>
     </div>
     <label class="hero-toggle">
-      <input id="line-search-toggle" type="checkbox" />
-      Use old line search
-    </label>
-    <label class="hero-toggle">
       <input id="debug-drag-toggle" type="checkbox" />
       Debug drag targets
     </label>
@@ -518,6 +514,13 @@ return new G9((params) => {
   pts.p0 = point(head.ref, {fill: "#ef4444", r: 7, affects: {x: true, y: true}});
 
   for (let i = 0; i < turns.length; i++) {
+    const turnAffects = i === 0
+      ? {r1: true}
+      : i === 1
+        ? {r2: true}
+        : i === 2
+          ? {r3: true}
+          : {r4: true};
     angle = angle.ref.add(turns[i].ref);
     const step = np.concatenate([
       np.cos(angle.ref).mul(segmentLength),
@@ -528,9 +531,9 @@ return new G9((params) => {
       stroke: "#1f2937",
       "stroke-width": 5 - i,
       "stroke-linecap": "round",
-      affects: {r1: true, r2: true, r3: true, r4: true},
+      affects: turnAffects,
     });
-    pts["p" + (i + 1)] = point(next.ref, {fill: "#0ea5e9", r: 5});
+    pts["p" + (i + 1)] = point(next.ref, {fill: "#0ea5e9", r: 5, affects: turnAffects});
     head = next;
   }
   return pts;

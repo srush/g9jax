@@ -6,8 +6,6 @@ import {
   jit,
   getG9DragDebugEnabled,
   setG9DragDebugEnabled,
-  getG9LineSearchEnabled,
-  setG9LineSearchEnabled,
   getG9DebugLossStats,
 } from "./g9";
 import { defaultDevice, init, vmap, type Device } from "@jax-js/jax";
@@ -118,11 +116,9 @@ function bindDemoLossRows(): void {
 
 (window as any).__runDemoFromTextarea = runDemoFromTextarea;
 (window as any).__g9SetDragDebugEnabled = setG9DragDebugEnabled;
-(window as any).__g9SetLineSearchEnabled = setG9LineSearchEnabled;
 
 function bindDebugControls(): void {
   const debugToggle = document.getElementById("debug-drag-toggle") as HTMLInputElement | null;
-  const lineSearchToggle = document.getElementById("line-search-toggle") as HTMLInputElement | null;
   const debugBox = document.getElementById("debug-stats-box");
   const avgLossValue = document.getElementById("avg-opt-loss-value");
   const avgLossCount = document.getElementById("avg-opt-loss-count");
@@ -155,13 +151,6 @@ function bindDebugControls(): void {
         window.clearInterval(statsTimer);
         statsTimer = null;
       }
-    });
-  }
-
-  if (lineSearchToggle) {
-    lineSearchToggle.checked = getG9LineSearchEnabled();
-    lineSearchToggle.addEventListener("change", () => {
-      setG9LineSearchEnabled(lineSearchToggle.checked);
     });
   }
 

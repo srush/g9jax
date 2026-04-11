@@ -605,6 +605,7 @@ run("snake demo runs offline and supports repeated minimization", () => {
     (params: Record<string, any>) => {
       const pts: Record<string, any> = {};
       const turns = [params.r1, params.r2, params.r3, params.r4];
+      const jointAffects = [{ r1: true }, { r2: true }, { r3: true }, { r4: true }];
       const segmentLength = 36;
       let angle = np.array([0], { dtype: np.float32 });
       let head = np.concatenate([params.x.ref, params.y.ref]);
@@ -620,9 +621,13 @@ run("snake demo runs offline and supports repeated minimization", () => {
           stroke: "#1f2937",
           "stroke-width": 5 - i,
           "stroke-linecap": "round",
-          affects: { r1: true, r2: true, r3: true, r4: true },
+          affects: jointAffects[i],
         });
-        pts[`p${i + 1}`] = point(next.ref, { fill: "#0ea5e9", r: 5 });
+        pts[`p${i + 1}`] = point(next.ref, {
+          fill: "#0ea5e9",
+          r: 5,
+          affects: jointAffects[i],
+        });
         head = next;
       }
       return pts;
@@ -652,6 +657,70 @@ run("snake demo runs offline and supports repeated minimization", () => {
   const x = toList((g9 as any).params[4].value)[0];
   const y = toList((g9 as any).params[5].value)[0];
   assert(Number.isFinite(x) && Number.isFinite(y), "snake demo params should remain finite");
+});
+
+run("snake tiny line drag does not overshoot turn parameters", () => {
+  const params: ParamState[] = [
+    { name: "r1", value: np.array([6.2594], { dtype: np.float32 }) },
+    { name: "r2", value: np.array([12.5397], { dtype: np.float32 }) },
+    { name: "r3", value: np.array([12.708], { dtype: np.float32 }) },
+    { name: "r4", value: np.array([6.0184], { dtype: np.float32 }) },
+    { name: "x", value: np.array([84], { dtype: np.float32 }) },
+    { name: "y", value: np.array([12], { dtype: np.float32 }) },
+  ];
+
+  const renderFn = (p: any) => {
+    const pts: Record<string, any> = {};
+    const turns = [p.r1, p.r2, p.r3, p.r4];
+    const segmentLength = 36;
+    const lineAffects = [{ r1: true }, { r2: true }, { r3: true }, { r4: true }];
+    const pointAffects = [{ r1: true }, { r2: true }, { r3: true }, { r4: true }];
+    let angle = np.array([0], { dtype: np.float32 });
+    let head = np.concatenate([p.x.ref, p.y.ref]);
+    pts.p0 = point(head.ref, { affects: { x: true, y: true } });
+    for (let i = 0; i < turns.length; i++) {
+      angle = angle.ref.add(turns[i].ref);
+      const step = np.concatenate([
+        np.cos(angle.ref).mul(segmentLength),
+        np.sin(angle.ref).mul(segmentLength),
+      ]);
+      const next = head.ref.add(step.ref);
+      pts[`s${i}`] = line(np.concatenate([head.ref, next.ref]), { affects: lineAffects[i] });
+      pts[`p${i + 1}`] = point(next.ref, { affects: pointAffects[i] });
+      head = next;
+    }
+    return pts;
+  };
+
+  const p: Record<string, any> = {};
+  for (const ps of params) p[ps.name] = ps.value.ref;
+  const shapes = renderFn(p);
+  const s1 = toList(shapes.s1.c);
+  const cx = (s1[0] + s1[2]) / 2;
+  const cy = (s1[1] + s1[3]) / 2;
+  const ldx = s1[2] - s1[0];
+  const ldy = s1[3] - s1[1];
+  const ll2 = ldx * ldx + ldy * ldy;
+  const r = ll2 > 0 ? ((cx - s1[0]) * ldx + (cy - s1[1]) * ldy) / ll2 : 0;
+  const before = params.map((ps) => toList(ps.value)[0]);
+
+  const lineLoss = (target: any, coords: any) => {
+    const cv = coords.s1;
+    const fromPt = cv.ref.slice([0, 2]);
+    const toPt = cv.slice([2, 4]);
+    const dir = toPt.sub(fromPt.ref);
+    const rr = target.ref.slice([2, 3]);
+    const predicted = fromPt.add(dir.mul(rr));
+    const t = target.slice([0, 2]);
+    const d = predicted.sub(t);
+    return d.ref.mul(d).sum();
+  };
+
+  minimize(params, renderFn as any, lineLoss as any, [cx + 1, cy, r], { r2: true }, 5);
+  const after = params.map((ps) => toList(ps.value)[0]);
+  const deltas = after.map((v, i) => Math.abs(v - before[i]));
+  assert(deltas[1] < 0.02, `expected small r2 change for tiny drag, got ${deltas[1]}`);
+  assert(deltas[0] < 1e-6 && deltas[2] < 1e-6 && deltas[3] < 1e-6, "other turn params should not move");
 });
 
 run("tongs demo runs offline and supports repeated minimization", () => {
@@ -803,6 +872,9 @@ run("bezier demo runs offline and supports repeated minimization", () => {
 });
 
 run("adaptive-step optimizer converges better with 8 iterations than 6", () => {
+  const prev = getG9LineSearchEnabled();
+  setG9LineSearchEnabled(false);
+  try {
   const SIDES = 8;
   const offsets: number[] = [];
   for (let i = 0; i < SIDES; i++) {
@@ -853,6 +925,9 @@ run("adaptive-step optimizer converges better with 8 iterations than 6", () => {
   const err8 = runWithIter(8);
   console.log(`convergence residual (6 vs 8 iters): ${err6.toFixed(4)} vs ${err8.toFixed(4)}`);
   assert(err8 < err6, `expected 8 iterations to converge better than 6 (${err8} !< ${err6})`);
+  } finally {
+    setG9LineSearchEnabled(prev);
+  }
 });
 
 console.log("All offline regression tests passed.");
