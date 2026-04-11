@@ -92,6 +92,8 @@
       position: relative;
       background: #fefce8;
       border-bottom: 1px solid var(--border);
+      touch-action: none;
+      overscroll-behavior: contain;
     }
     .demo-canvas svg {
       width: 100%;
@@ -383,6 +385,193 @@ return new G9((params) => {
   return pts;
 }, {deltaAngle: [33], startLength: [65],
     attenuation: [0.7]});</textarea>
+        <button class="run-btn">Run ▶</button>
+        <div class="error-msg"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Demo: Snake (ported from bijection/g9) -->
+  <div class="demo-section" id="section-snake" style="display:none">
+    <h2>Snake (ported)</h2>
+    <p class="desc">Ported from <code>bijection/g9</code>: a chained polyline controlled by cumulative turn angles.</p>
+    <div class="demo-card">
+      <div class="demo-canvas" id="demo-snake"></div>
+      <div class="demo-code" data-target="#demo-snake">
+        <textarea>return new G9((params) => {
+  const pts = {};
+  const turns = [params.r1, params.r2, params.r3, params.r4];
+  let angle = np.array([0], {dtype: np.float32});
+  let head = np.concatenate([params.x.ref, params.y.ref]);
+  const dots = [head];
+
+  for (let i = 0; i < turns.length; i++) {
+    angle = angle.ref.add(turns[i].ref);
+    const step = np.concatenate([
+      np.cos(angle.ref).mul(50),
+      np.sin(angle).mul(50),
+    ]);
+    head = head.ref.add(step.ref);
+    dots.push(head);
+  }
+
+  for (let i = 0; i < dots.length; i++) {
+    const color = i === 0 ? "#ef4444" : "#0ea5e9";
+    const affects = i === 0 ? {x: true, y: true} : undefined;
+    pts["p" + i] = point(dots[i].ref, {fill: color, r: i === 0 ? 7 : 5, affects});
+    if (i > 0) {
+      pts["s" + (i - 1)] = line(np.concatenate([dots[i - 1].ref, dots[i].ref]), {
+        stroke: "#1f2937",
+        "stroke-width": 6 - i,
+        "stroke-linecap": "round",
+        affects: {r1: true, r2: true, r3: true, r4: true},
+      });
+    }
+  }
+  return pts;
+}, {
+  r1: [6.2594],
+  r2: [12.5397],
+  r3: [12.7080],
+  r4: [6.0184],
+  x: [120],
+  y: [20],
+});</textarea>
+        <button class="run-btn">Run ▶</button>
+        <div class="error-msg"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Demo: Tongs (ported from bijection/g9) -->
+  <div class="demo-section" id="section-tongs" style="display:none">
+    <h2>Tongs (ported)</h2>
+    <p class="desc">Ported from <code>bijection/g9</code>: linked segments with angle and opening controls.</p>
+    <div class="demo-card">
+      <div class="demo-canvas" id="demo-tongs"></div>
+      <div class="demo-code" data-target="#demo-tongs">
+        <textarea>const rotate = (xy, a) => {
+  const c = np.cos(a.ref);
+  const s = np.sin(a);
+  const x = xy.ref.slice([0, 1]);
+  const y = xy.slice([1, 2]);
+  return np.concatenate([
+    c.ref.mul(x.ref).sub(s.ref.mul(y.ref)),
+    s.ref.mul(x.ref).add(c.mul(y)),
+  ]);
+};
+
+return new G9((params) => {
+  const pts = {};
+  let x = np.array([0], {dtype: np.float32});
+  let yTop = np.array([0], {dtype: np.float32});
+  let yBottom = np.sin(params.b.ref).mul(-100);
+
+  for (let i = 0; i < 4; i++) {
+    const dir = i % 2 === 0 ? -1 : 1;
+    const nx = x.ref.add(np.cos(params.b.ref).mul(100));
+    const nyTop = yTop.ref.add(np.sin(params.b.ref).mul(100 * dir));
+    const nyBottom = yBottom.ref.sub(np.sin(params.b.ref).mul(100 * dir));
+
+    const a0 = rotate(np.concatenate([x.ref, yTop.ref]), params.a);
+    const a1 = rotate(np.concatenate([nx.ref, nyTop.ref]), params.a);
+    const b0 = rotate(np.concatenate([x.ref, yBottom.ref]), params.a);
+    const b1 = rotate(np.concatenate([nx.ref, nyBottom.ref]), params.a);
+
+    pts["u" + i] = line(np.concatenate([a0.ref, a1.ref]), {
+      stroke: "#111827",
+      "stroke-width": 8,
+      "stroke-linecap": "round",
+    });
+    pts["l" + i] = line(np.concatenate([b0.ref, b1.ref]), {
+      stroke: "#111827",
+      "stroke-width": 8,
+      "stroke-linecap": "round",
+    });
+    pts["up" + i] = point(a1.ref, {fill: "#0ea5e9", r: 4, affects: {a: true, b: true}});
+    pts["lp" + i] = point(b1.ref, {fill: "#0ea5e9", r: 4, affects: {a: true, b: true}});
+
+    x = nx;
+    yTop = nyTop;
+    yBottom = nyBottom;
+  }
+  return pts;
+}, {a: [0.3], b: [1.0]});</textarea>
+        <button class="run-btn">Run ▶</button>
+        <div class="error-msg"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Demo: Bezier (ported from bijection/g9) -->
+  <div class="demo-section" id="section-bezier" style="display:none">
+    <h2>Bezier (ported)</h2>
+    <p class="desc">Ported from <code>bijection/g9</code>: De Casteljau construction with draggable control points.</p>
+    <div class="demo-card">
+      <div class="demo-canvas" id="demo-bezier"></div>
+      <div class="demo-code" data-target="#demo-bezier">
+        <textarea>return new G9((params) => {
+  const pts = {};
+  const start = params.start;
+  const middle = params.middle;
+  const end = params.end;
+  const steps = 30;
+  const t = params.t;
+
+  pts.ctrl1 = line(np.concatenate([start.ref, middle.ref]), {stroke: "rgba(0,0,0,0.25)"});
+  pts.ctrl2 = line(np.concatenate([middle.ref, end.ref]), {stroke: "rgba(0,0,0,0.25)"});
+  pts.pStart = point(start.ref, {fill: "#0ea5e9", r: 6});
+  pts.pMiddle = point(middle.ref, {fill: "#f97316", r: 6});
+  pts.pEnd = point(end.ref, {fill: "#0ea5e9", r: 6});
+
+  const curve = [];
+  for (let i = 0; i < steps; i++) {
+    const r = t.ref.mul(i / steps);
+    const oneMinus = np.array([1], {dtype: np.float32}).sub(r.ref);
+    const ax = start.ref.slice([0, 1]).mul(oneMinus.ref).add(middle.ref.slice([0, 1]).mul(r.ref));
+    const ay = start.ref.slice([1, 2]).mul(oneMinus.ref).add(middle.ref.slice([1, 2]).mul(r.ref));
+    const bx = middle.ref.slice([0, 1]).mul(oneMinus.ref).add(end.ref.slice([0, 1]).mul(r.ref));
+    const by = middle.ref.slice([1, 2]).mul(oneMinus.ref).add(end.ref.slice([1, 2]).mul(r.ref));
+    const a = np.concatenate([ax, ay]);
+    const b = np.concatenate([bx, by]);
+    const cx = ax.ref.mul(oneMinus.ref).add(bx.ref.mul(r.ref));
+    const cy = ay.ref.mul(oneMinus.ref).add(by.ref.mul(r.ref));
+    const c = np.concatenate([cx, cy]);
+    if (i % 4 === 0) {
+      pts["step" + i] = line(np.concatenate([a.ref, b.ref]), {
+        stroke: "rgba(0,0,0,0.12)",
+        affects: {t: true},
+      });
+    }
+    curve.push(c);
+  }
+
+  for (let i = 1; i < curve.length; i++) {
+    pts["curve" + i] = line(np.concatenate([curve[i - 1].ref, curve[i].ref]), {
+      stroke: "#111827",
+      "stroke-width": 4,
+      affects: {t: true},
+    });
+  }
+
+  const tY = np.array([140], {dtype: np.float32});
+  const tX = t.ref.mul(300).sub(150);
+  pts.tAxis = line(np.array([-150, 140, 150, 140], {dtype: np.float32}), {
+    stroke: "#94a3b8",
+    "stroke-width": 2,
+  });
+  pts.tKnob = point(np.concatenate([tX, tY]), {
+    fill: "#16a34a",
+    r: 7,
+    affects: {t: true},
+  });
+  return pts;
+}, {
+  start: [-140, 82],
+  middle: [9, -224],
+  end: [190, 77],
+  t: [0.5],
+});</textarea>
         <button class="run-btn">Run ▶</button>
         <div class="error-msg"></div>
       </div>

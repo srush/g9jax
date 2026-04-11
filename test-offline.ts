@@ -1,5 +1,5 @@
 import { numpy as np, vmap } from "@jax-js/jax";
-import { G9, minimize, point, line } from "./src/g9";
+import { G9, minimize, point, line, getG9RuntimeStats, resetG9RuntimeStats } from "./src/g9";
 
 if (typeof (globalThis as { Float16Array?: typeof Float32Array }).Float16Array === "undefined") {
   (globalThis as { Float16Array: typeof Float32Array }).Float16Array = Float32Array;
@@ -253,6 +253,67 @@ run("rings radius can repeatedly shrink", () => {
   }
   const radius = toList(params[0].value)[0];
   assert(radius <= 60.5, `radius should shrink to near target, got ${radius}`);
+});
+
+run("jit cache is reused across repeated minimizations", () => {
+  resetG9RuntimeStats();
+  const params: ParamState[] = [
+    { name: "xy", value: np.array([40, 0], { dtype: np.float32 }) },
+  ];
+  const renderFn = (p: any) => {
+    const xy = p.xy;
+    const flip = np.array([[0, 1], [1, 0]], { dtype: np.float32 });
+    const p2 = np.dot(flip, xy.ref);
+    return { p1: point(xy), p2: point(p2) };
+  };
+  const lossFn = (target: any, coords: any) => {
+    const d = coords.p1.sub(target);
+    return d.ref.mul(d).sum();
+  };
+
+  let cached: any = undefined;
+  for (let i = 0; i < 12; i++) {
+    cached = minimize(params, renderFn, lossFn, [60 + i, 10], null, 8, cached);
+  }
+
+  const stats = getG9RuntimeStats();
+  assert(stats.minimizeCalls >= 12, "expected repeated minimize calls");
+  assert(stats.jitBuilds === 1, `expected one jit build, got ${stats.jitBuilds}`);
+  assert(stats.jitCacheHits >= 10, `expected cache hits, got ${stats.jitCacheHits}`);
+});
+
+run("affects mask is reused from cached state", () => {
+  resetG9RuntimeStats();
+  const params: ParamState[] = [
+    { name: "line1", value: np.array([-100, -50, 100, -50], { dtype: np.float32 }) },
+    { name: "line2", value: np.array([-100, 0, 100, 0], { dtype: np.float32 }) },
+    { name: "line3", value: np.array([-100, 50, 100, 50], { dtype: np.float32 }) },
+  ];
+  const renderFn = (p: any) => ({
+    line1: line(p.line1),
+    line2: line(p.line2),
+    line3: line(p.line3),
+  });
+  const lossFn = (target: any, coords: any) => {
+    const cv = coords.line3;
+    const fromPt = cv.ref.slice([0, 2]);
+    const toPt = cv.slice([2, 4]);
+    const dir = toPt.sub(fromPt.ref);
+    const r = target.ref.slice([2, 3]);
+    const predicted = fromPt.add(dir.mul(r));
+    const t = target.slice([0, 2]);
+    const d = predicted.sub(t);
+    return d.ref.mul(d).sum();
+  };
+
+  let cached: any = undefined;
+  const affects = { line3: [1, 0, 0, 1] };
+  for (let i = 0; i < 10; i++) {
+    cached = minimize(params, renderFn, lossFn, [-140 - i * 4, 50, -0.2], affects, 8, cached);
+  }
+
+  assert(cached.affectsMask, "expected cached affects mask");
+  assert(cached.affectsRef === affects, "expected affects reference to be reused");
 });
 
 run("dragon render survives optimization path", () => {
