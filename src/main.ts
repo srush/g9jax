@@ -16,6 +16,10 @@ function setBanner(msg: string) {
   if (el) el.innerHTML = msg;
 }
 
+function nextFrame(): Promise<void> {
+  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+}
+
 function runDemoFromTextarea(sectionId: string, canvasSelector: string) {
   const section = document.getElementById(sectionId);
   if (!section) return;
@@ -67,6 +71,9 @@ async function main() {
   }
 
   setBanner('<span class="spinner"></span> Rendering demos…');
+
+  // Match the "Run" button path by mounting after layout has settled.
+  await nextFrame();
 
   const demos = [
     ["section-points", "#demo-points"],
