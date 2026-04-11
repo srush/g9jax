@@ -700,11 +700,13 @@ function addDrag(
     e.stopPropagation();
     if (e.cancelable) e.preventDefault();
     beginGlobalDrag();
+    el.classList.add("g9-active-drag");
     const f = firstPointer(e);
     let session: DragSession;
     try {
       session = onStartCb(f);
     } catch (error) {
+      el.classList.remove("g9-active-drag");
       endGlobalDrag();
       throw error;
     }
@@ -718,6 +720,8 @@ function addDrag(
       onDrag(latestDx, latestDy);
       rafId = scheduleFrame(tick);
     };
+    // Immediate first solve gives instant visual feedback on touch-down.
+    onDrag(0, 0);
     rafId = scheduleFrame(tick);
 
     function move(ev: MouseEvent | TouchEvent) {
@@ -740,6 +744,7 @@ function addDrag(
       document.removeEventListener("mouseup", end);
       document.removeEventListener("touchend", end);
       document.removeEventListener("touchcancel", end);
+      el.classList.remove("g9-active-drag");
       session.end?.();
       endGlobalDrag();
     }
