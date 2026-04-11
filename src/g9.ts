@@ -56,6 +56,15 @@ export function line(
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const MOBILE_POINT_RADIUS_SCALE = 1.35;
+let activeDragCount = 0;
+let dragDebugEnabled = false;
+let lineSearchEnabled = false;
+const liveG9Instances = new Set<G9>();
+const debugLossStats = {
+  sum: 0,
+  count: 0,
+  last: 0,
+};
 
 function setAttrs(el: Element, attrs: Record<string, any>): void {
   for (const [k, v] of Object.entries(attrs)) {
@@ -74,10 +83,61 @@ function scalePointRadius(radius: number): number {
   return hasCoarsePointer() ? radius * MOBILE_POINT_RADIUS_SCALE : radius;
 }
 
+function beginGlobalDrag(): void {
+  if (typeof document === "undefined") return;
+  activeDragCount += 1;
+  if (activeDragCount === 1) {
+    const root = (document as any).documentElement;
+    root?.classList?.add("g9-dragging");
+  }
+}
+
+function endGlobalDrag(): void {
+  if (typeof document === "undefined") return;
+  activeDragCount = Math.max(0, activeDragCount - 1);
+  if (activeDragCount === 0) {
+    const root = (document as any).documentElement;
+    root?.classList?.remove("g9-dragging");
+  }
+}
+
+export function setG9DragDebugEnabled(enabled: boolean): void {
+  dragDebugEnabled = enabled;
+  if (enabled) {
+    debugLossStats.sum = 0;
+    debugLossStats.count = 0;
+    debugLossStats.last = 0;
+  }
+  for (const g9 of liveG9Instances) g9.syncDebugVisibility();
+}
+
+export function getG9DragDebugEnabled(): boolean {
+  return dragDebugEnabled;
+}
+
+export function setG9LineSearchEnabled(enabled: boolean): void {
+  lineSearchEnabled = enabled;
+}
+
+export function getG9LineSearchEnabled(): boolean {
+  return lineSearchEnabled;
+}
+
+export function getG9DebugLossStats(): { average: number; count: number; last: number } {
+  const average = debugLossStats.count > 0 ? debugLossStats.sum / debugLossStats.count : 0;
+  return {
+    average,
+    count: debugLossStats.count,
+    last: debugLossStats.last,
+  };
+}
+
 function markDraggable(el: SVGElement): void {
   el.style.touchAction = "none";
   el.style.userSelect = "none";
   (el.style as any).webkitUserSelect = "none";
+  (el.style as any).webkitTouchCallout = "none";
+  (el.style as any).webkitTapHighlightColor = "transparent";
 }
 
 function toJS(x: any): any {
@@ -95,6 +155,11 @@ function toJSArr(arr: any): number[] {
   }
   if (Array.isArray(arr)) return arr.map(Number);
   return [Number(arr)];
+}
+
+function evalLoss(jitLoss: any, targetLen: number, x: number[], combinedBuffer: Float32Array): number {
+  for (let i = 0; i < x.length; i++) combinedBuffer[targetLen + i] = x[i];
+  return Number(toJS(jitLoss(np.array(combinedBuffer, { dtype: np.float32 }))));
 }
 
 // ---------------------------------------------------------------------------
@@ -338,6 +403,32 @@ export function minimize(
     let gmax = 0;
     for (let i = 0; i < dim; i++) gmax = Math.max(gmax, Math.abs(gBuffer[i]));
 
+    if (lineSearchEnabled) {
+      for (let i = 0; i < dim; i++) x0Buffer[i] = x[i];
+      const f0 = evalLoss(jitLoss, tLen, x, combinedBuffer);
+      let alpha = Math.min(1.0, 8.0 / (gmax + 1e-6));
+      let accepted = false;
+
+      for (let ls = 0; ls < 8; ls++) {
+        for (let i = 0; i < dim; i++) {
+          trialBuffer[tLen + i] = x0Buffer[i] - alpha * gBuffer[i];
+        }
+        const fTrial = Number(toJS(jitLoss(np.array(trialBuffer, { dtype: np.float32 }))));
+        if (Number.isFinite(fTrial) && fTrial <= f0 - 1e-4 * alpha * gnorm2) {
+          for (let i = 0; i < dim; i++) x[i] = trialBuffer[tLen + i];
+          accepted = true;
+          break;
+        }
+        alpha *= 0.5;
+      }
+
+      if (!accepted) {
+        const fallbackStep = Math.min(0.12, 2.0 / (Math.sqrt(gnorm2) + 1e-6));
+        for (let i = 0; i < dim; i++) x[i] -= fallbackStep * gBuffer[i];
+      }
+      continue;
+    }
+
     const lr = Math.min(0.35, 8.0 / (gmax + 1e-6));
     const momentum = 0.7;
     const maxStep = 18.0;
@@ -346,6 +437,15 @@ export function minimize(
       velocityBuffer[i] = v;
       const delta = v > maxStep ? maxStep : v < -maxStep ? -maxStep : v;
       x[i] += delta;
+    }
+  }
+
+  if (dragDebugEnabled) {
+    const loss = evalLoss(jitLoss, tLen, x, combinedBuffer);
+    if (Number.isFinite(loss)) {
+      debugLossStats.sum += loss;
+      debugLossStats.count += 1;
+      debugLossStats.last = loss;
     }
   }
 
@@ -407,9 +507,16 @@ class PointEl {
     this._cached = g9._warmup(lossFn, [0, 0]);
 
     addDrag(this.el, (_evt) => {
-      const c0 = this._cachedCoords;
-      return (dx, dy) => {
-        this._cached = doMinimize(id, lossFn, [c0[0] + dx, c0[1] + dy], this.args.affects, this._cached);
+      const c0 = this._cachedCoords.slice();
+      return {
+        drag: (dx, dy) => {
+          const pullX = c0[0] + dx;
+          const pullY = c0[1] + dy;
+          this._cached = doMinimize(id, lossFn, [pullX, pullY], this.args.affects, this._cached);
+          const model = this._cachedCoords;
+          this.g9.setDragDebug([pullX, pullY], [model[0], model[1]]);
+        },
+        end: () => this.g9.clearDragDebug(),
       };
     });
   }
@@ -476,7 +583,7 @@ class LineEl {
     this._cached = g9._warmup(lossFn, [0, 0, 0]);
 
     addDrag(this.el, (evt) => {
-      const c = this._cachedCoords;
+      const c = this._cachedCoords.slice();
       const off = g9.getOffset();
       const cx = evt.clientX - off.left;
       const cy = evt.clientY - off.top;
@@ -485,8 +592,17 @@ class LineEl {
       const ll2 = ldx * ldx + ldy * ldy;
       const r = ll2 > 0 ? (pdx * ldx + pdy * ldy) / ll2 : 0;
 
-      return (dx, dy) => {
-        this._cached = doMinimize(id, lossFn, [cx + dx, cy + dy, r], this.args.affects, this._cached);
+      return {
+        drag: (dx, dy) => {
+          const pullX = cx + dx;
+          const pullY = cy + dy;
+          this._cached = doMinimize(id, lossFn, [pullX, pullY, r], this.args.affects, this._cached);
+          const model = this._cachedCoords;
+          const targetX = model[0] + (model[2] - model[0]) * r;
+          const targetY = model[1] + (model[3] - model[1]) * r;
+          this.g9.setDragDebug([pullX, pullY], [targetX, targetY]);
+        },
+        end: () => this.g9.clearDragDebug(),
       };
     });
   }
@@ -516,9 +632,14 @@ class LineEl {
 // Mouse / touch drag
 // ---------------------------------------------------------------------------
 
+type DragSession = {
+  drag: (dx: number, dy: number) => void;
+  end?: () => void;
+};
+
 function addDrag(
   el: SVGElement,
-  onStartCb: (event: MouseEvent | Touch) => (dx: number, dy: number) => void,
+  onStartCb: (event: MouseEvent | Touch) => DragSession,
 ): void {
   const scheduleFrame = (cb: () => void): number => {
     if (typeof requestAnimationFrame === "function") {
@@ -540,9 +661,17 @@ function addDrag(
 
   function start(e: MouseEvent | TouchEvent) {
     e.stopPropagation();
-    e.preventDefault();
+    if (e.cancelable) e.preventDefault();
+    beginGlobalDrag();
     const f = firstPointer(e);
-    const onDrag = onStartCb(f);
+    let session: DragSession;
+    try {
+      session = onStartCb(f);
+    } catch (error) {
+      endGlobalDrag();
+      throw error;
+    }
+    const onDrag = session.drag;
     const sx = f.clientX, sy = f.clientY;
     let latestDx = 0;
     let latestDy = 0;
@@ -554,7 +683,8 @@ function addDrag(
     };
 
     function move(ev: MouseEvent | TouchEvent) {
-      ev.preventDefault();
+      ev.stopPropagation();
+      if (ev.cancelable) ev.preventDefault();
       const m = firstPointer(ev);
       latestDx = m.clientX - sx;
       latestDy = m.clientY - sy;
@@ -563,7 +693,8 @@ function addDrag(
       }
     }
     function end(ev: MouseEvent | TouchEvent) {
-      ev.preventDefault();
+      ev.stopPropagation();
+      if (ev.cancelable) ev.preventDefault();
       if (rafId !== 0) {
         cancelFrame(rafId);
         rafId = 0;
@@ -574,6 +705,8 @@ function addDrag(
       document.removeEventListener("mouseup", end);
       document.removeEventListener("touchend", end);
       document.removeEventListener("touchcancel", end);
+      session.end?.();
+      endGlobalDrag();
     }
     document.addEventListener("mousemove", move);
     document.addEventListener("touchmove", move, { passive: false });
@@ -600,6 +733,8 @@ export class G9 {
   xOff: number;
   yOff: number;
   _rect: DOMRect | null;
+  _debugPullEl: SVGCircleElement | null;
+  _debugTargetEl: SVGCircleElement | null;
 
   constructor(
     renderFn: RenderFn,
@@ -622,6 +757,60 @@ export class G9 {
     this.xOff = 0;
     this.yOff = 0;
     this._rect = null;
+    this._debugPullEl = null;
+    this._debugTargetEl = null;
+    liveG9Instances.add(this);
+  }
+
+  _ensureDebugMarkers(): void {
+    if (this._debugPullEl && this._debugTargetEl) return;
+    const pull = document.createElementNS(SVG_NS, "circle");
+    const target = document.createElementNS(SVG_NS, "circle");
+    setAttrs(pull, {
+      r: scalePointRadius(5),
+      fill: "#fb923c",
+      stroke: "#ffffff",
+      "stroke-width": 1.5,
+      "pointer-events": "none",
+      opacity: 0.95,
+    });
+    setAttrs(target, {
+      r: scalePointRadius(4),
+      fill: "#ec4899",
+      stroke: "#ffffff",
+      "stroke-width": 1.5,
+      "pointer-events": "none",
+      opacity: 0.95,
+    });
+    pull.style.display = "none";
+    target.style.display = "none";
+    this.node.appendChild(pull);
+    this.node.appendChild(target);
+    this._debugPullEl = pull;
+    this._debugTargetEl = target;
+  }
+
+  syncDebugVisibility(): void {
+    if (!this._debugPullEl || !this._debugTargetEl) return;
+    if (dragDebugEnabled) return;
+    this._debugPullEl.style.display = "none";
+    this._debugTargetEl.style.display = "none";
+  }
+
+  setDragDebug(pull: [number, number], target: [number, number]): void {
+    if (!dragDebugEnabled) return;
+    this._ensureDebugMarkers();
+    if (!this._debugPullEl || !this._debugTargetEl) return;
+    this._debugPullEl.style.display = "";
+    this._debugTargetEl.style.display = "";
+    setAttrs(this._debugPullEl, { cx: pull[0], cy: pull[1] });
+    setAttrs(this._debugTargetEl, { cx: target[0], cy: target[1] });
+  }
+
+  clearDragDebug(): void {
+    if (!this._debugPullEl || !this._debugTargetEl) return;
+    this._debugPullEl.style.display = "none";
+    this._debugTargetEl.style.display = "none";
   }
 
   getOffset(): { top: number; left: number } {
@@ -653,7 +842,13 @@ export class G9 {
     const h = () => this.resize();
     window.addEventListener("resize", h);
     this.resize();
+    this.syncDebugVisibility();
     return this;
+  }
+
+  destroy(): void {
+    liveG9Instances.delete(this);
+    this.clearDragDebug();
   }
 
   _warmup(lossFn: LossFn, target: number[]): CachedJit {
@@ -805,6 +1000,10 @@ export class G9 {
         elem.updateCoords(allCoords.slice(off, off + n));
         off += n;
       }
+    }
+    if (this._debugPullEl && this._debugTargetEl) {
+      this.node.appendChild(this._debugPullEl);
+      this.node.appendChild(this._debugTargetEl);
     }
   }
 }

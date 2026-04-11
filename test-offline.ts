@@ -1,5 +1,17 @@
 import { numpy as np, vmap } from "@jax-js/jax";
-import { G9, minimize, point, line, getG9RuntimeStats, resetG9RuntimeStats } from "./src/g9";
+import {
+  G9,
+  minimize,
+  point,
+  line,
+  getG9RuntimeStats,
+  resetG9RuntimeStats,
+  getG9DragDebugEnabled,
+  setG9DragDebugEnabled,
+  getG9LineSearchEnabled,
+  setG9LineSearchEnabled,
+  getG9DebugLossStats,
+} from "./src/g9";
 
 if (typeof (globalThis as { Float16Array?: typeof Float32Array }).Float16Array === "undefined") {
   (globalThis as { Float16Array: typeof Float32Array }).Float16Array = Float32Array;
@@ -35,6 +47,10 @@ class FakeElement {
   children: FakeElement[] = [];
   textContent = "";
   attrs: Record<string, string> = {};
+  classList = {
+    add: () => {},
+    remove: () => {},
+  };
   appendChild(child: FakeElement): FakeElement { this.children.push(child); return child; }
   removeChild(child: FakeElement): FakeElement { const i = this.children.indexOf(child); if (i >= 0) this.children.splice(i, 1); return child; }
   setAttributeNS(_ns: string | null, key: string, value: string): void { this.attrs[key] = value; }
@@ -51,6 +67,8 @@ function installFakeDom(): FakeElement {
     querySelector: () => host,
     addEventListener: () => {},
     removeEventListener: () => {},
+    getElementById: () => null,
+    documentElement: { classList: { add: () => {}, remove: () => {} } },
   };
   (globalThis as any).window = { addEventListener: () => {}, removeEventListener: () => {} };
   return host;
@@ -78,6 +96,49 @@ run("point drag loss minimizes", () => {
   minimize(params, renderFn, lossFn, [50, 10], null, 5);
   const xy = toList(params[0].value);
   assert(Number.isFinite(xy[0]) && Number.isFinite(xy[1]), "point params should remain finite");
+});
+
+run("line-search mode toggle keeps optimization stable", () => {
+  const prev = getG9LineSearchEnabled();
+  setG9LineSearchEnabled(true);
+  try {
+    const params: ParamState[] = [
+      { name: "xy", value: np.array([40, 0], { dtype: np.float32 }) },
+    ];
+    const renderFn = (p: any) => ({ p1: point(p.xy) });
+    const lossFn = (target: any, coords: any) => {
+      const d = coords.p1.sub(target);
+      return d.ref.mul(d).sum();
+    };
+    for (const target of [[65, 10], [42, -18], [50, 4]]) {
+      minimize(params, renderFn, lossFn, target, null, 8);
+    }
+    const xy = toList(params[0].value);
+    assert(xy.every(Number.isFinite), "line-search mode should keep params finite");
+  } finally {
+    setG9LineSearchEnabled(prev);
+  }
+});
+
+run("debug mode tracks average optimization loss", () => {
+  const prevDebug = getG9DragDebugEnabled();
+  setG9DragDebugEnabled(true);
+  try {
+    const params: ParamState[] = [
+      { name: "xy", value: np.array([35, -10], { dtype: np.float32 }) },
+    ];
+    const renderFn = (p: any) => ({ p1: point(p.xy) });
+    const lossFn = (target: any, coords: any) => {
+      const d = coords.p1.sub(target);
+      return d.ref.mul(d).sum();
+    };
+    minimize(params, renderFn, lossFn, [42, 8], null, 4);
+    const stats = getG9DebugLossStats();
+    assert(stats.count > 0, "debug loss stats should record samples");
+    assert(Number.isFinite(stats.average), "debug loss average should be finite");
+  } finally {
+    setG9DragDebugEnabled(prevDebug);
+  }
 });
 
 run("basic example render path works exactly as in main.ts", () => {

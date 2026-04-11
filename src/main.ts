@@ -1,4 +1,15 @@
-import { G9, point, line, np, jit } from "./g9";
+import {
+  G9,
+  point,
+  line,
+  np,
+  jit,
+  getG9DragDebugEnabled,
+  setG9DragDebugEnabled,
+  getG9LineSearchEnabled,
+  setG9LineSearchEnabled,
+  getG9DebugLossStats,
+} from "./g9";
 import { defaultDevice, init, vmap, type Device } from "@jax-js/jax";
 
 function show(id: string) {
@@ -20,16 +31,24 @@ function nextFrame(): Promise<void> {
   return new Promise((resolve) => requestAnimationFrame(() => resolve()));
 }
 
+const demoMountState = new Map<string, G9>();
+
 function runDemoFromTextarea(sectionId: string, canvasSelector: string) {
   const section = document.getElementById(sectionId);
   if (!section) return;
   show(sectionId);
   const textarea = section.querySelector("textarea");
   if (!textarea) return;
+  const existing = demoMountState.get(canvasSelector);
+  if (existing) {
+    existing.render();
+    return;
+  }
   const fn = new Function("G9", "point", "line", "np", "jit", "vmap", textarea.value);
   const g9 = fn(G9, point, line, np, jit, vmap);
   if (g9 instanceof G9) {
     g9.align("center", "center").insertInto(canvasSelector);
+    demoMountState.set(canvasSelector, g9);
   }
 }
 
@@ -65,6 +84,52 @@ function bindRunButtons(): void {
 }
 
 (window as any).__runDemoFromTextarea = runDemoFromTextarea;
+(window as any).__g9SetDragDebugEnabled = setG9DragDebugEnabled;
+(window as any).__g9SetLineSearchEnabled = setG9LineSearchEnabled;
+
+function bindDebugControls(): void {
+  const debugToggle = document.getElementById("debug-drag-toggle") as HTMLInputElement | null;
+  const lineSearchToggle = document.getElementById("line-search-toggle") as HTMLInputElement | null;
+  const debugBox = document.getElementById("debug-stats-box");
+  const avgLossValue = document.getElementById("avg-opt-loss-value");
+  const avgLossCount = document.getElementById("avg-opt-loss-count");
+
+  const renderDebugStats = () => {
+    const debugEnabled = debugToggle?.checked ?? false;
+    if (!debugEnabled) {
+      if (debugBox instanceof HTMLElement) debugBox.style.display = "none";
+      return;
+    }
+    if (debugBox instanceof HTMLElement) debugBox.style.display = "block";
+    const stats = getG9DebugLossStats();
+    if (avgLossValue) {
+      avgLossValue.textContent = stats.count > 0 ? stats.average.toExponential(3) : "—";
+    }
+    if (avgLossCount) {
+      avgLossCount.textContent = String(stats.count);
+    }
+  };
+
+  if (debugToggle) {
+    debugToggle.checked = getG9DragDebugEnabled();
+    debugToggle.addEventListener("change", () => {
+      setG9DragDebugEnabled(debugToggle.checked);
+      renderDebugStats();
+    });
+  }
+
+  if (lineSearchToggle) {
+    lineSearchToggle.checked = getG9LineSearchEnabled();
+    lineSearchToggle.addEventListener("change", () => {
+      setG9LineSearchEnabled(lineSearchToggle.checked);
+    });
+  }
+
+  renderDebugStats();
+  window.setInterval(renderDebugStats, 200);
+}
+(window as any).__g9SetDragDebugEnabled = setG9DragDebugEnabled;
+(window as any).__g9GetDragDebugEnabled = getG9DragDebugEnabled;
 
 async function main() {
   setBanner('<span class="spinner"></span> Initialising jax-js runtime…');
@@ -104,8 +169,7 @@ async function main() {
   }
 
   bindRunButtons();
-
-  setBanner('<span class="spinner"></span> Rendering demos…');
+  bindDebugControls();
 
   const demos = [
     ["section-points", "#demo-points"],
@@ -118,24 +182,44 @@ async function main() {
     ["section-bezier", "#demo-bezier"],
   ] as const;
 
-  // Unhide first so layout/offsets settle before any G9 instance mounts.
+  // Unhide sections first for layout consistency.
   for (const [sectionId] of demos) show(sectionId);
 
-  // Match the "Run" button path by mounting after layout has settled.
+  // Render one demo immediately, then mount the rest progressively.
   await nextFrame();
   await nextFrame();
 
-  for (const [sectionId, canvasSelector] of demos) {
+  const [firstSectionId, firstCanvas] = demos[0];
+  runDemoFromTextarea(firstSectionId, firstCanvas);
+  hideBanner();
+  console.log(`${firstSectionId} OK`);
+
+  const mountRemaining = async () => {
+    await nextFrame();
+    for (let i = 1; i < demos.length; i++) {
+      const [sectionId, canvasSelector] = demos[i];
+      try {
+        runDemoFromTextarea(sectionId, canvasSelector);
+        console.log(`${sectionId} OK`);
+      } catch (e) {
+        console.error(`${sectionId} failed:`, e);
+      }
+      await nextFrame();
+    }
+    console.log("All demos rendered");
+  };
+
+  void mountRemaining();
+
+  for (let i = 1; i < demos.length; i++) {
+    const [sectionId, canvasSelector] = demos[i];
     try {
-      runDemoFromTextarea(sectionId, canvasSelector);
-      console.log(`${sectionId} OK`);
+      const section = document.getElementById(sectionId);
+      if (section) section.dataset.demoTarget = canvasSelector;
     } catch (e) {
       console.error(`${sectionId} failed:`, e);
     }
   }
-
-  hideBanner();
-  console.log("All demos rendered");
 }
 
 main().catch((err) => {
