@@ -447,7 +447,19 @@ export function minimize(
   const affectsMask = cached && cached.affectsRef === affects
     ? cached.affectsMask
     : buildAffectsMask(params, sizes, affects);
-  let x = cached && cached.lastX.length === dim ? cached.lastX.slice() : readVec(params);
+  const currentX = readVec(params);
+  let x = currentX;
+  if (cached && cached.lastX.length === dim) {
+    // Reuse cache only when it still matches current param state.
+    let sameState = true;
+    for (let i = 0; i < dim; i++) {
+      if (Math.abs(cached.lastX[i] - currentX[i]) > 1e-5) {
+        sameState = false;
+        break;
+      }
+    }
+    if (sameState) x = cached.lastX.slice();
+  }
   for (let i = 0; i < tLen; i++) {
     const tv = target[i];
     combinedBuffer[i] = tv;
