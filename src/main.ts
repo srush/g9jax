@@ -1,5 +1,5 @@
 import { G9, point, line, np, jit } from "./g9";
-import { defaultDevice, init, vmap, devices } from "@jax-js/jax";
+import { defaultDevice, init, vmap, type Device } from "@jax-js/jax";
 
 function show(id: string) {
   const el = document.getElementById(id);
@@ -32,27 +32,28 @@ function runDemoFromTextarea(sectionId: string, canvasSelector: string) {
 async function main() {
   setBanner('<span class="spinner"></span> Initialising jax-js runtime…');
 
+  let readyDevices: Device[] = [];
   try {
-    await init();
-    console.log("jax-js init complete, devices:", devices);
+    readyDevices = await init();
+    console.log("jax-js init complete, devices:", readyDevices);
   } catch (e: any) {
     console.warn("jax-js full init failed, trying cpu-only:", e.message || e);
     try {
-      await init("cpu");
+      readyDevices = await init("cpu");
     } catch (e2: any) {
       console.warn("jax-js cpu init also failed:", e2.message || e2);
     }
   }
 
-  const preferred: Array<typeof devices[number]> = ["webgpu", "webgl", "cpu"];
-  const chosen = preferred.find((d) => devices.includes(d)) ?? devices[0];
+  const preferred: Device[] = ["webgpu", "webgl", "cpu"];
+  const chosen = preferred.find((d) => readyDevices.includes(d)) ?? readyDevices[0];
   defaultDevice(chosen);
   console.log("jax-js default device:", chosen);
 
   const select = document.getElementById("backend-select") as HTMLSelectElement | null;
   if (select) {
     select.innerHTML = "";
-    for (const d of devices) {
+    for (const d of readyDevices) {
       const opt = document.createElement("option");
       opt.value = d;
       opt.textContent = d;
