@@ -174,6 +174,7 @@ type CachedJit = {
   x0Buffer: Float64Array;
   gBuffer: Float64Array;
   renderBuffer: Float32Array;
+  velocityBuffer: Float64Array;
 };
 
 export function minimize(
@@ -205,6 +206,7 @@ export function minimize(
       x0Buffer: null,
       gBuffer: null,
       renderBuffer: null,
+      velocityBuffer: null,
     };
   }
 
@@ -221,6 +223,9 @@ export function minimize(
     : new Float64Array(dim);
   const gBuffer = cached?.gBuffer && cached.gBuffer.length === dim
     ? cached.gBuffer
+    : new Float64Array(dim);
+  const velocityBuffer = cached?.velocityBuffer && cached.velocityBuffer.length === dim
+    ? cached.velocityBuffer
     : new Float64Array(dim);
   const renderBuffer = cached?.renderBuffer && cached.renderBuffer.length === dim
     ? cached.renderBuffer
@@ -290,6 +295,7 @@ export function minimize(
       x0Buffer,
       gBuffer,
       renderBuffer,
+      velocityBuffer,
     };
   }
 
@@ -306,7 +312,6 @@ export function minimize(
   for (let it = 0; it < maxIter; it++) {
     for (let i = 0; i < dim; i++) combinedBuffer[tLen + i] = x[i];
     const combined = np.array(combinedBuffer, { dtype: np.float32 });
-    const f0 = toJS(jitLoss(combined.ref));
     const fullG = toJSArr(jitGrad(combined));
     if (affectsMask) {
       for (let i = 0; i < dim; i++) gBuffer[i] = fullG[tLen + i] * affectsMask[i];
@@ -321,33 +326,15 @@ export function minimize(
     let gmax = 0;
     for (let i = 0; i < dim; i++) gmax = Math.max(gmax, Math.abs(gBuffer[i]));
 
-    for (let i = 0; i < dim; i++) x0Buffer[i] = x[i];
-    let lr = Math.min(1.0, 10.0 / gmax);
-    let improved = false;
-    let bestLr = 0;
-    let bestF = f0;
-    for (let ls = 0; ls < 12; ls++) {
-      for (let i = 0; i < dim; i++) {
-        trialBuffer[tLen + i] = x0Buffer[i] - lr * gBuffer[i];
-      }
-      const f1 = toJS(jitLoss(np.array(trialBuffer, { dtype: np.float32 })));
-      if (f1 < bestF) {
-        bestF = f1;
-        bestLr = lr;
-      }
-      if (f1 < f0 - 1e-4 * lr * gnorm2) {
-        for (let i = 0; i < dim; i++) x[i] = x0Buffer[i] - lr * gBuffer[i];
-        improved = true;
-        break;
-      }
-      lr *= 0.5;
+    const lr = Math.min(0.35, 8.0 / (gmax + 1e-6));
+    const momentum = 0.7;
+    const maxStep = 18.0;
+    for (let i = 0; i < dim; i++) {
+      const v = momentum * velocityBuffer[i] - lr * gBuffer[i];
+      velocityBuffer[i] = v;
+      const delta = v > maxStep ? maxStep : v < -maxStep ? -maxStep : v;
+      x[i] += delta;
     }
-
-    if (!improved && bestLr > 0) {
-      for (let i = 0; i < dim; i++) x[i] = x0Buffer[i] - bestLr * gBuffer[i];
-      improved = true;
-    }
-    if (!improved) break;
   }
 
   writeVec(params, sizes, x);
@@ -365,6 +352,7 @@ export function minimize(
     x0Buffer,
     gBuffer,
     renderBuffer,
+    velocityBuffer,
   };
 }
 
@@ -719,6 +707,7 @@ export class G9 {
       x0Buffer: new Float64Array(dim),
       gBuffer: new Float64Array(dim),
       renderBuffer: new Float32Array(dim),
+      velocityBuffer: new Float64Array(dim),
     };
   }
 
@@ -729,7 +718,7 @@ export class G9 {
     affects: Record<string, any> | null | undefined,
     cached?: CachedJit,
   ): CachedJit {
-    const c = minimize(this.params, this.renderFn, lossFn, target, affects, 10, cached);
+    const c = minimize(this.params, this.renderFn, lossFn, target, affects, 6, cached);
     this._renderFast(c);
     return c;
   }
