@@ -113,6 +113,9 @@ async function main() {
     ["section-lines", "#demo-lines"],
     ["section-dragon", "#demo-dragon"],
     ["section-tree", "#demo-tree"],
+    ["section-snake", "#demo-snake"],
+    ["section-tongs", "#demo-tongs"],
+    ["section-bezier", "#demo-bezier"],
   ] as const;
 
   // Unhide first so layout/offsets settle before any G9 instance mounts.
