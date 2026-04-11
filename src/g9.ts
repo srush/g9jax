@@ -132,30 +132,49 @@ function buildAffectsMask(
   params: ParamState[],
   sizes: number[],
   affects: Record<string, any> | null | undefined,
-): Float64Array {
+): Float64Array | null {
+  if (!affects) return null;
   const total = sizes.reduce((a, b) => a + b, 0);
   const mask = new Float64Array(total).fill(1);
-  if (!affects) return mask;
+  let hasRestrictions = false;
   let idx = 0;
   for (let pi = 0; pi < params.length; pi++) {
     const n = sizes[pi];
     for (let j = 0; j < n; j++) {
       if (!(params[pi].name in affects)) {
         mask[idx] = 0;
+        hasRestrictions = true;
       } else {
         const a = affects[params[pi].name];
         if (a !== true) {
           const av = Array.isArray(a) ? a : toJSArr(a);
-          if (av[j] === 0) mask[idx] = 0;
+          if (av[j] === 0) {
+            mask[idx] = 0;
+            hasRestrictions = true;
+          }
         }
       }
       idx++;
     }
   }
-  return mask;
+  return hasRestrictions ? mask : null;
 }
 
-type CachedJit = { jitLoss: any; jitGrad: any; jitRender: any; renderIds: string[]; targetLen: number; lastX: number[] };
+type CachedJit = {
+  jitLoss: any;
+  jitGrad: any;
+  jitRender: any;
+  renderIds: string[];
+  targetLen: number;
+  lastX: number[];
+  affectsRef: Record<string, any> | null | undefined;
+  affectsMask: Float64Array | null;
+  combinedBuffer: Float32Array;
+  trialBuffer: Float32Array;
+  x0Buffer: Float64Array;
+  gBuffer: Float64Array;
+  renderBuffer: Float32Array;
+};
 
 export function minimize(
   params: ParamState[],
@@ -170,9 +189,42 @@ export function minimize(
   const sizes = params.map((p) => p.value.shape[0]);
   const paramNames = params.map((p) => p.name);
   const dim = sizes.reduce((a, b) => a + b, 0);
-  if (dim === 0) return cached ?? { jitLoss: null, jitGrad: null, jitRender: null, renderIds: [], targetLen: 0, lastX: [] };
+  if (dim === 0) {
+    if (cached) return cached;
+    return {
+      jitLoss: null,
+      jitGrad: null,
+      jitRender: null,
+      renderIds: [],
+      targetLen: 0,
+      lastX: [],
+      affectsRef: null,
+      affectsMask: null,
+      combinedBuffer: null,
+      trialBuffer: null,
+      x0Buffer: null,
+      gBuffer: null,
+      renderBuffer: null,
+    };
+  }
 
   const tLen = target.length;
+  const totalLen = tLen + dim;
+  const combinedBuffer = cached?.combinedBuffer && cached.combinedBuffer.length === totalLen
+    ? cached.combinedBuffer
+    : new Float32Array(totalLen);
+  const trialBuffer = cached?.trialBuffer && cached.trialBuffer.length === totalLen
+    ? cached.trialBuffer
+    : new Float32Array(totalLen);
+  const x0Buffer = cached?.x0Buffer && cached.x0Buffer.length === dim
+    ? cached.x0Buffer
+    : new Float64Array(dim);
+  const gBuffer = cached?.gBuffer && cached.gBuffer.length === dim
+    ? cached.gBuffer
+    : new Float64Array(dim);
+  const renderBuffer = cached?.renderBuffer && cached.renderBuffer.length === dim
+    ? cached.renderBuffer
+    : new Float32Array(dim);
 
   let jitLoss: any, jitGrad: any, jitRender: any;
   let renderIds: string[] = cached?.renderIds ?? [];
@@ -224,57 +276,96 @@ export function minimize(
   }
 
   if (maxIter === 0) {
-    return { jitLoss, jitGrad, jitRender, renderIds, targetLen: tLen, lastX: [] };
+    return {
+      jitLoss,
+      jitGrad,
+      jitRender,
+      renderIds,
+      targetLen: tLen,
+      lastX: [],
+      affectsRef: null,
+      affectsMask: null,
+      combinedBuffer,
+      trialBuffer,
+      x0Buffer,
+      gBuffer,
+      renderBuffer,
+    };
   }
 
-  const mask = buildAffectsMask(params, sizes, affects);
-  let x = readVec(params);
+  const affectsMask = cached && cached.affectsRef === affects
+    ? cached.affectsMask
+    : buildAffectsMask(params, sizes, affects);
+  let x = cached && cached.lastX.length === dim ? cached.lastX.slice() : readVec(params);
+  for (let i = 0; i < tLen; i++) {
+    const tv = target[i];
+    combinedBuffer[i] = tv;
+    trialBuffer[i] = tv;
+  }
 
   for (let it = 0; it < maxIter; it++) {
-    const combined = np.array([...target, ...x], { dtype: np.float32 });
+    for (let i = 0; i < dim; i++) combinedBuffer[tLen + i] = x[i];
+    const combined = np.array(combinedBuffer, { dtype: np.float32 });
     const f0 = toJS(jitLoss(combined.ref));
     const fullG = toJSArr(jitGrad(combined));
-    const g = fullG.slice(tLen);
-    for (let i = 0; i < dim; i++) g[i] *= mask[i];
+    if (affectsMask) {
+      for (let i = 0; i < dim; i++) gBuffer[i] = fullG[tLen + i] * affectsMask[i];
+    } else {
+      for (let i = 0; i < dim; i++) gBuffer[i] = fullG[tLen + i];
+    }
 
     let gnorm2 = 0;
-    for (let i = 0; i < dim; i++) gnorm2 += g[i] * g[i];
+    for (let i = 0; i < dim; i++) gnorm2 += gBuffer[i] * gBuffer[i];
     if (gnorm2 < 1e-12) break;
 
     let gmax = 0;
-    for (let i = 0; i < dim; i++) gmax = Math.max(gmax, Math.abs(g[i]));
+    for (let i = 0; i < dim; i++) gmax = Math.max(gmax, Math.abs(gBuffer[i]));
 
-    const x0 = x.slice();
+    for (let i = 0; i < dim; i++) x0Buffer[i] = x[i];
     let lr = Math.min(1.0, 10.0 / gmax);
     let improved = false;
-
-    let bestX: number[] | null = null;
+    let bestLr = 0;
     let bestF = f0;
     for (let ls = 0; ls < 12; ls++) {
-      const xn = x0.map((v, i) => v - lr * g[i]);
-      const lsArr = np.array([...target, ...xn], { dtype: np.float32 });
-      const f1 = toJS(jitLoss(lsArr));
+      for (let i = 0; i < dim; i++) {
+        trialBuffer[tLen + i] = x0Buffer[i] - lr * gBuffer[i];
+      }
+      const f1 = toJS(jitLoss(np.array(trialBuffer, { dtype: np.float32 })));
       if (f1 < bestF) {
         bestF = f1;
-        bestX = xn;
+        bestLr = lr;
       }
       if (f1 < f0 - 1e-4 * lr * gnorm2) {
-        x = xn;
+        for (let i = 0; i < dim; i++) x[i] = x0Buffer[i] - lr * gBuffer[i];
         improved = true;
         break;
       }
       lr *= 0.5;
     }
 
-    if (!improved && bestX) {
-      x = bestX;
+    if (!improved && bestLr > 0) {
+      for (let i = 0; i < dim; i++) x[i] = x0Buffer[i] - bestLr * gBuffer[i];
       improved = true;
     }
     if (!improved) break;
   }
 
   writeVec(params, sizes, x);
-  return { jitLoss, jitGrad, jitRender, renderIds, targetLen: tLen, lastX: x };
+  return {
+    jitLoss,
+    jitGrad,
+    jitRender,
+    renderIds,
+    targetLen: tLen,
+    lastX: x,
+    affectsRef: affects,
+    affectsMask,
+    combinedBuffer,
+    trialBuffer,
+    x0Buffer,
+    gBuffer,
+    renderBuffer,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -614,7 +705,21 @@ export class G9 {
     const jitRender = jit(renderOnlyFn);
     runtimeStats.warmupBuilds += 1;
     jitRender(np.array(x, { dtype: np.float32 }));
-    return { jitLoss, jitGrad, jitRender, renderIds, targetLen: tLen, lastX: x };
+    return {
+      jitLoss,
+      jitGrad,
+      jitRender,
+      renderIds,
+      targetLen: tLen,
+      lastX: x,
+      affectsRef: null,
+      affectsMask: null,
+      combinedBuffer: new Float32Array(tLen + dim),
+      trialBuffer: new Float32Array(tLen + dim),
+      x0Buffer: new Float64Array(dim),
+      gBuffer: new Float64Array(dim),
+      renderBuffer: new Float32Array(dim),
+    };
   }
 
   _minimize(
@@ -630,8 +735,11 @@ export class G9 {
   }
 
   _renderFast(cached: CachedJit): void {
-    const flat = np.array(cached.lastX, { dtype: np.float32 });
-    const result = cached.jitRender(flat);
+    const n = cached.lastX.length;
+    const flatBuf = cached.renderBuffer.length === n ? cached.renderBuffer : new Float32Array(n);
+    for (let i = 0; i < n; i++) flatBuf[i] = cached.lastX[i];
+    cached.renderBuffer = flatBuf;
+    const result = cached.jitRender(np.array(flatBuf, { dtype: np.float32 }));
     const allCoords: number[] = typeof result?.dataSync === "function"
       ? Array.from(result.dataSync())
       : toJSArr(result);
