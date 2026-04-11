@@ -51,10 +51,21 @@ async function main() {
     }
   }
 
-  const backendEl = document.getElementById("backend-info");
-  if (backendEl) {
-    const allDevices = devices.map((d: any) => d.toString()).join(", ");
-    backendEl.textContent = `Backend: ${backendName} | Available: ${allDevices}`;
+  const select = document.getElementById("backend-select") as HTMLSelectElement | null;
+  if (select) {
+    select.innerHTML = "";
+    for (const d of devices) {
+      const opt = document.createElement("option");
+      const name = d.toString();
+      opt.value = name;
+      opt.textContent = name;
+      if (name === backendName) opt.selected = true;
+      select.appendChild(opt);
+    }
+    select.addEventListener("change", () => {
+      defaultDevice(select.value as any);
+      console.log("Backend switched to", defaultDevice().toString());
+    });
   }
 
   setBanner('<span class="spinner"></span> Rendering demos…');
