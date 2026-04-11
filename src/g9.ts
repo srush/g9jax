@@ -1,4 +1,42 @@
-import { numpy as np, jit, jacfwd, vmap } from "@jax-js/jax";
+import { numpy as jaxNp, jit, grad, jacfwd, vmap } from "@jax-js/jax";
+
+function isTracerLike(value: any): boolean {
+  return !!value
+    && typeof value === "object"
+    && "_trace" in value
+    && typeof value.dataSync !== "function";
+}
+
+function concatWithGradCompat(values: any[]): any {
+  if (!Array.isArray(values) || values.length === 0) {
+    return jaxNp.concatenate(values as any);
+  }
+  const anchor = values.find(isTracerLike);
+  if (!anchor) return jaxNp.concatenate(values);
+  const zero = anchor.ref.sum().mul(0);
+  const lifted = values.map((value) => {
+    if (isTracerLike(value)) return value;
+    if (value && typeof value === "object" && "ref" in value) {
+      return (value as any).ref.add(zero);
+    }
+    return value;
+  });
+  return jaxNp.concatenate(lifted);
+}
+
+function isReverseModeUnsupported(error: any): boolean {
+  if (error?.name === "NonlinearError") return true;
+  const message = String(error?.message ?? error);
+  return message.includes("Nonlinear operation in backward pass");
+}
+
+const np: typeof jaxNp = new Proxy(jaxNp as any, {
+  get(target, prop, receiver) {
+    if (prop === "concatenate") return concatWithGradCompat;
+    const value = Reflect.get(target, prop, receiver);
+    return typeof value === "function" ? value.bind(target) : value;
+  },
+}) as typeof jaxNp;
 
 type ShapeArgs = { type: "point" | "line"; c: any } & Record<string, any>;
 type ParamState = { name: string; value: any };
@@ -263,6 +301,8 @@ function buildAffectsMask(
 type CachedJit = {
   jitLoss: any;
   jitGrad: any;
+  jitGradFallback: any;
+  useGradFallback: boolean;
   jitRender: any;
   jitBatchLoss: any;
   renderIds: string[];
@@ -305,6 +345,8 @@ export function minimize(
     return {
       jitLoss: null,
       jitGrad: null,
+      jitGradFallback: null,
+      useGradFallback: false,
       jitRender: null,
       jitBatchLoss: null,
       renderIds: [],
@@ -370,12 +412,15 @@ export function minimize(
     ? cached.bfgsHy
     : new Float64Array(dim);
 
-  let jitLoss: any, jitGrad: any, jitRender: any, jitBatchLoss: any;
+  let jitLoss: any, jitGrad: any, jitGradFallback: any, jitRender: any, jitBatchLoss: any;
+  let useGradFallback = cached?.useGradFallback ?? false;
   let renderIds: string[] = cached?.renderIds ?? [];
   if (cached && cached.targetLen === tLen) {
     runtimeStats.jitCacheHits += 1;
     jitLoss = cached.jitLoss;
     jitGrad = cached.jitGrad;
+    jitGradFallback = cached.jitGradFallback ?? cached.jitGrad;
+    useGradFallback = cached.useGradFallback ?? false;
     jitRender = cached.jitRender;
     jitBatchLoss = cached.jitBatchLoss;
   } else {
@@ -412,7 +457,9 @@ export function minimize(
       return np.concatenate(arrays);
     };
     jitLoss = jit(combinedFn);
-    jitGrad = jit(jacfwd(combinedFn));
+    jitGrad = jit(grad(combinedFn));
+    jitGradFallback = jit(jacfwd(combinedFn));
+    useGradFallback = false;
     jitRender = jit(renderOnlyFn);
     jitBatchLoss = jit(vmap(combinedFn, [0]));
     runtimeStats.jitBuilds += 1;
@@ -424,6 +471,8 @@ export function minimize(
     return {
       jitLoss,
       jitGrad,
+      jitGradFallback,
+      useGradFallback,
       jitRender,
       jitBatchLoss,
       renderIds,
@@ -474,7 +523,14 @@ export function minimize(
     iterationsUsed = it + 1;
     for (let i = 0; i < dim; i++) combinedBuffer[tLen + i] = x[i];
     const combined = np.array(combinedBuffer, { dtype: np.float32 });
-    const fullG = toJSArr(jitGrad(combined));
+    let fullG: number[];
+    try {
+      fullG = toJSArr((useGradFallback ? jitGradFallback : jitGrad)(combined));
+    } catch (error) {
+      if (useGradFallback || !isReverseModeUnsupported(error)) throw error;
+      useGradFallback = true;
+      fullG = toJSArr(jitGradFallback(combined));
+    }
     if (affectsMask) {
       for (let i = 0; i < dim; i++) gBuffer[i] = fullG[tLen + i] * affectsMask[i];
     } else {
@@ -576,7 +632,14 @@ export function minimize(
 
       for (let i = 0; i < dim; i++) combinedBuffer[tLen + i] = x[i];
       const nextCombined = np.array(combinedBuffer, { dtype: np.float32 });
-      const nextGradFull = toJSArr(jitGrad(nextCombined));
+      let nextGradFull: number[];
+      try {
+        nextGradFull = toJSArr((useGradFallback ? jitGradFallback : jitGrad)(nextCombined));
+      } catch (error) {
+        if (useGradFallback || !isReverseModeUnsupported(error)) throw error;
+        useGradFallback = true;
+        nextGradFull = toJSArr(jitGradFallback(nextCombined));
+      }
       if (affectsMask) {
         for (let i = 0; i < dim; i++) bfgsGradNext[i] = nextGradFull[tLen + i] * affectsMask[i];
       } else {
@@ -644,6 +707,8 @@ export function minimize(
   return {
     jitLoss,
     jitGrad,
+    jitGradFallback,
+    useGradFallback,
     jitRender,
     jitBatchLoss,
     renderIds,
@@ -1125,7 +1190,9 @@ export class G9 {
       return np.concatenate(arrays);
     };
     const jitLoss = jit(combinedFn);
-    const jitGrad = jit(jacfwd(combinedFn));
+    const jitGrad = jit(grad(combinedFn));
+    const jitGradFallback = jit(jacfwd(combinedFn));
+    let useGradFallback = false;
     const jitRender = jit(renderOnlyFn);
     const jitBatchLoss = jit(vmap(combinedFn, [0]));
     runtimeStats.warmupBuilds += 1;
@@ -1135,7 +1202,13 @@ export class G9 {
     for (let i = 0; i < tLen; i++) warmupCombined[i] = target[i] ?? 0;
     for (let i = 0; i < dim; i++) warmupCombined[tLen + i] = x[i];
     jitLoss(np.array(warmupCombined, { dtype: np.float32 }));
-    jitGrad(np.array(warmupCombined, { dtype: np.float32 }));
+    try {
+      jitGrad(np.array(warmupCombined, { dtype: np.float32 }));
+    } catch (error) {
+      if (!isReverseModeUnsupported(error)) throw error;
+      useGradFallback = true;
+      jitGradFallback(np.array(warmupCombined, { dtype: np.float32 }));
+    }
     const warmupBatch = new Float32Array(totalLen * LINE_SEARCH_TRIALS);
     for (let ls = 0; ls < LINE_SEARCH_TRIALS; ls++) {
       const row = ls * totalLen;
@@ -1145,6 +1218,8 @@ export class G9 {
     return {
       jitLoss,
       jitGrad,
+      jitGradFallback,
+      useGradFallback,
       jitRender,
       jitBatchLoss,
       renderIds,

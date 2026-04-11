@@ -261,9 +261,9 @@
   <h1>g9-<span>jaxjs</span></h1>
   <p>Automatically interactive graphics powered by
     <a href="https://github.com/ekzhang/jax-js" style="color:var(--accent);text-decoration:none;">jax-js</a>
-    forward-mode differentiation. Drag the shapes!</p>
+    reverse-mode gradients. Drag the shapes!</p>
   <div class="badges">
-    <span class="badge">jit(jacfwd) forward-mode AD</span>
+    <span class="badge">jit(grad) reverse-mode AD</span>
     <span class="badge">jax-js</span>
     <span class="badge">SVG</span>
     <span class="badge">vmap</span>
@@ -624,7 +624,7 @@ return new G9((params) => {
 <footer>
   Inspired by <a href="https://omrelli.ug/g9/">g9.js</a> and
   <a href="https://github.com/srush/g9py">g9py</a>.
-  Built with <a href="https://github.com/ekzhang/jax-js">jax-js</a> &mdash; jit, jacfwd, vmap.
+  Built with <a href="https://github.com/ekzhang/jax-js">jax-js</a> &mdash; jit, grad, vmap.
 </footer>
 
 <script type="module" src="/src/main.ts"></script>
