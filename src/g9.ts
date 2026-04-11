@@ -56,6 +56,7 @@ export function line(
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const MOBILE_POINT_RADIUS_SCALE = 1.35;
+let activeDragCount = 0;
 
 function setAttrs(el: Element, attrs: Record<string, any>): void {
   for (const [k, v] of Object.entries(attrs)) {
@@ -74,10 +75,24 @@ function scalePointRadius(radius: number): number {
   return hasCoarsePointer() ? radius * MOBILE_POINT_RADIUS_SCALE : radius;
 }
 
+function beginGlobalDrag(): void {
+  if (typeof document === "undefined") return;
+  activeDragCount += 1;
+  if (activeDragCount === 1) document.documentElement.classList.add("g9-dragging");
+}
+
+function endGlobalDrag(): void {
+  if (typeof document === "undefined") return;
+  activeDragCount = Math.max(0, activeDragCount - 1);
+  if (activeDragCount === 0) document.documentElement.classList.remove("g9-dragging");
+}
+
 function markDraggable(el: SVGElement): void {
   el.style.touchAction = "none";
   el.style.userSelect = "none";
   (el.style as any).webkitUserSelect = "none";
+  (el.style as any).webkitTouchCallout = "none";
+  (el.style as any).webkitTapHighlightColor = "transparent";
 }
 
 function toJS(x: any): any {
@@ -540,7 +555,8 @@ function addDrag(
 
   function start(e: MouseEvent | TouchEvent) {
     e.stopPropagation();
-    e.preventDefault();
+    if (e.cancelable) e.preventDefault();
+    beginGlobalDrag();
     const f = firstPointer(e);
     const onDrag = onStartCb(f);
     const sx = f.clientX, sy = f.clientY;
@@ -554,7 +570,8 @@ function addDrag(
     };
 
     function move(ev: MouseEvent | TouchEvent) {
-      ev.preventDefault();
+      ev.stopPropagation();
+      if (ev.cancelable) ev.preventDefault();
       const m = firstPointer(ev);
       latestDx = m.clientX - sx;
       latestDy = m.clientY - sy;
@@ -563,7 +580,8 @@ function addDrag(
       }
     }
     function end(ev: MouseEvent | TouchEvent) {
-      ev.preventDefault();
+      ev.stopPropagation();
+      if (ev.cancelable) ev.preventDefault();
       if (rafId !== 0) {
         cancelFrame(rafId);
         rafId = 0;
@@ -574,6 +592,7 @@ function addDrag(
       document.removeEventListener("mouseup", end);
       document.removeEventListener("touchend", end);
       document.removeEventListener("touchcancel", end);
+      endGlobalDrag();
     }
     document.addEventListener("mousemove", move);
     document.addEventListener("touchmove", move, { passive: false });

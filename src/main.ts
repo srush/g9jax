@@ -20,16 +20,24 @@ function nextFrame(): Promise<void> {
   return new Promise((resolve) => requestAnimationFrame(() => resolve()));
 }
 
+const demoMountState = new Map<string, G9>();
+
 function runDemoFromTextarea(sectionId: string, canvasSelector: string) {
   const section = document.getElementById(sectionId);
   if (!section) return;
   show(sectionId);
   const textarea = section.querySelector("textarea");
   if (!textarea) return;
+  const existing = demoMountState.get(canvasSelector);
+  if (existing) {
+    existing.render();
+    return;
+  }
   const fn = new Function("G9", "point", "line", "np", "jit", "vmap", textarea.value);
   const g9 = fn(G9, point, line, np, jit, vmap);
   if (g9 instanceof G9) {
     g9.align("center", "center").insertInto(canvasSelector);
+    demoMountState.set(canvasSelector, g9);
   }
 }
 
@@ -105,8 +113,6 @@ async function main() {
 
   bindRunButtons();
 
-  setBanner('<span class="spinner"></span> Rendering demos…');
-
   const demos = [
     ["section-points", "#demo-points"],
     ["section-rings", "#demo-rings"],
@@ -118,24 +124,44 @@ async function main() {
     ["section-bezier", "#demo-bezier"],
   ] as const;
 
-  // Unhide first so layout/offsets settle before any G9 instance mounts.
+  // Unhide sections first for layout consistency.
   for (const [sectionId] of demos) show(sectionId);
 
-  // Match the "Run" button path by mounting after layout has settled.
+  // Render one demo immediately, then mount the rest progressively.
   await nextFrame();
   await nextFrame();
 
-  for (const [sectionId, canvasSelector] of demos) {
+  const [firstSectionId, firstCanvas] = demos[0];
+  runDemoFromTextarea(firstSectionId, firstCanvas);
+  hideBanner();
+  console.log(`${firstSectionId} OK`);
+
+  const mountRemaining = async () => {
+    await nextFrame();
+    for (let i = 1; i < demos.length; i++) {
+      const [sectionId, canvasSelector] = demos[i];
+      try {
+        runDemoFromTextarea(sectionId, canvasSelector);
+        console.log(`${sectionId} OK`);
+      } catch (e) {
+        console.error(`${sectionId} failed:`, e);
+      }
+      await nextFrame();
+    }
+    console.log("All demos rendered");
+  };
+
+  void mountRemaining();
+
+  for (let i = 1; i < demos.length; i++) {
+    const [sectionId, canvasSelector] = demos[i];
     try {
-      runDemoFromTextarea(sectionId, canvasSelector);
-      console.log(`${sectionId} OK`);
+      const section = document.getElementById(sectionId);
+      if (section) section.dataset.demoTarget = canvasSelector;
     } catch (e) {
       console.error(`${sectionId} failed:`, e);
     }
   }
-
-  hideBanner();
-  console.log("All demos rendered");
 }
 
 main().catch((err) => {
