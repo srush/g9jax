@@ -35,6 +35,10 @@ class FakeElement {
   children: FakeElement[] = [];
   textContent = "";
   attrs: Record<string, string> = {};
+  classList = {
+    add: () => {},
+    remove: () => {},
+  };
   appendChild(child: FakeElement): FakeElement { this.children.push(child); return child; }
   removeChild(child: FakeElement): FakeElement { const i = this.children.indexOf(child); if (i >= 0) this.children.splice(i, 1); return child; }
   setAttributeNS(_ns: string | null, key: string, value: string): void { this.attrs[key] = value; }
@@ -51,6 +55,8 @@ function installFakeDom(): FakeElement {
     querySelector: () => host,
     addEventListener: () => {},
     removeEventListener: () => {},
+    getElementById: () => null,
+    documentElement: { classList: { add: () => {}, remove: () => {} } },
   };
   (globalThis as any).window = { addEventListener: () => {}, removeEventListener: () => {} };
   return host;

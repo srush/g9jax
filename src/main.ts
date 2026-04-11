@@ -1,4 +1,4 @@
-import { G9, point, line, np, jit } from "./g9";
+import { G9, point, line, np, jit, getG9DragDebugEnabled, setG9DragDebugEnabled } from "./g9";
 import { defaultDevice, init, vmap, type Device } from "@jax-js/jax";
 
 function show(id: string) {
@@ -72,7 +72,18 @@ function bindRunButtons(): void {
   });
 }
 
+function bindDragDebugToggle(): void {
+  const checkbox = document.getElementById("drag-debug-toggle");
+  if (!(checkbox instanceof HTMLInputElement)) return;
+  checkbox.checked = getG9DragDebugEnabled();
+  checkbox.addEventListener("change", () => {
+    setG9DragDebugEnabled(checkbox.checked);
+  });
+}
+
 (window as any).__runDemoFromTextarea = runDemoFromTextarea;
+(window as any).__g9SetDragDebugEnabled = setG9DragDebugEnabled;
+(window as any).__g9GetDragDebugEnabled = getG9DragDebugEnabled;
 
 async function main() {
   setBanner('<span class="spinner"></span> Initialising jax-js runtime…');
@@ -112,6 +123,7 @@ async function main() {
   }
 
   bindRunButtons();
+  bindDragDebugToggle();
 
   const demos = [
     ["section-points", "#demo-points"],
