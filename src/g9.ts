@@ -186,6 +186,7 @@ export function minimize(
     jitLoss = jit(combinedFn);
     jitGrad = jit(jacfwd(combinedFn));
     jitRender = jit(renderOnlyFn);
+    jitRender(np.array(x, { dtype: np.float64 }));
   }
 
   for (let it = 0; it < maxIter; it++) {
