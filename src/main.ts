@@ -28,7 +28,7 @@ function setBanner(msg: string) {
 }
 
 function updateDemoLoss(card: Element | null, loss: number | null): void {
-  const lossEl = card?.querySelector(".demo-loss-value");
+  const lossEl = card?.querySelector(".loss-value");
   if (!(lossEl instanceof HTMLElement)) return;
   if (loss == null || !Number.isFinite(loss)) {
     lossEl.textContent = "—";
@@ -101,8 +101,9 @@ function bindDemoLossRows(): void {
     const custom = event as CustomEvent<{ containerId: string; loss: number }>;
     const containerId = custom.detail?.containerId;
     if (!containerId) return;
-    const card = document.querySelector(`.demo-code[data-target="#${containerId}"]`);
-    updateDemoLoss(card, custom.detail?.loss ?? null);
+    const codeCard = document.querySelector(`.demo-code[data-target="#${containerId}"]`);
+    const demoCard = codeCard instanceof Element ? codeCard.closest(".demo-card") : null;
+    updateDemoLoss(demoCard, custom.detail?.loss ?? null);
   });
 }
 

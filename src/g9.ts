@@ -714,10 +714,11 @@ function addDrag(
     let latestDy = 0;
     let rafId = 0;
 
-    const flush = () => {
-      rafId = 0;
+    const tick = () => {
       onDrag(latestDx, latestDy);
+      rafId = scheduleFrame(tick);
     };
+    rafId = scheduleFrame(tick);
 
     function move(ev: MouseEvent | TouchEvent) {
       ev.stopPropagation();
@@ -725,9 +726,6 @@ function addDrag(
       const m = firstPointer(ev);
       latestDx = m.clientX - sx;
       latestDy = m.clientY - sy;
-      if (rafId === 0) {
-        rafId = scheduleFrame(flush);
-      }
     }
     function end(ev: MouseEvent | TouchEvent) {
       ev.stopPropagation();
@@ -735,8 +733,8 @@ function addDrag(
       if (rafId !== 0) {
         cancelFrame(rafId);
         rafId = 0;
-        onDrag(latestDx, latestDy);
       }
+      onDrag(latestDx, latestDy);
       document.removeEventListener("mousemove", move);
       document.removeEventListener("touchmove", move);
       document.removeEventListener("mouseup", end);
