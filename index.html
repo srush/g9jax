@@ -130,6 +130,21 @@
       border-radius: var(--radius);
       overflow: hidden;
     }
+    .demo-loss {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 0.75rem;
+      padding: 0.4rem 0.8rem;
+      font-family: var(--mono);
+      font-size: 0.76rem;
+      color: #334155;
+      background: #f8fafc;
+      border-bottom: 1px solid var(--border);
+    }
+    .demo-loss .loss-value {
+      font-variant-numeric: tabular-nums;
+    }
     .demo-canvas {
       width: 100%;
       height: 360px;
@@ -281,6 +296,9 @@
     <h2>Basic</h2>
     <p class="desc">Two points: one at (x, y) and one at (y, x). Drag one and the other mirrors it.</p>
     <div class="demo-card">
+      <div class="demo-loss" id="loss-demo-points">
+        <span>Loss</span><span class="loss-value">—</span>
+      </div>
       <div class="demo-canvas" id="demo-points"></div>
       <div class="demo-code" data-target="#demo-points">
         <textarea>const FLIP = np.array([[0,1],[1,0]], {dtype: np.float32});
@@ -301,6 +319,9 @@ return new G9((params) => {
     <h2>Rings</h2>
     <p class="desc">Points arranged in two concentric circles using trigonometry. All controlled by radius and angle parameters.</p>
     <div class="demo-card">
+      <div class="demo-loss" id="loss-demo-rings">
+        <span>Loss</span><span class="loss-value">—</span>
+      </div>
       <div class="demo-canvas" id="demo-rings"></div>
       <div class="demo-code" data-target="#demo-rings">
         <textarea>const SIDES = 8;
@@ -355,6 +376,9 @@ return new G9((params) => {
     <h2>Lines with affects</h2>
     <p class="desc">Three lines with different <code>affects</code> constraints controlling which endpoints can move.</p>
     <div class="demo-card">
+      <div class="demo-loss" id="loss-demo-lines">
+        <span>Loss</span><span class="loss-value">—</span>
+      </div>
       <div class="demo-canvas" id="demo-lines"></div>
       <div class="demo-code" data-target="#demo-lines">
         <textarea>const opts = {"stroke-width": 8};
@@ -381,6 +405,9 @@ return new G9((params) => ({
     <h2>Dragon Curve</h2>
     <p class="desc">A recursive dragon curve. Drag the endpoints or the curve to change its squareness.</p>
     <div class="demo-card">
+      <div class="demo-loss" id="loss-demo-dragon">
+        <span>Loss</span><span class="loss-value">—</span>
+      </div>
       <div class="demo-canvas" id="demo-dragon"></div>
       <div class="demo-code" data-target="#demo-dragon">
         <textarea>const ROT = np.array([[0,1],[-1,0]], {dtype: np.float32});
@@ -422,6 +449,9 @@ return new G9((params) => {
     <h2>Fractal Tree</h2>
     <p class="desc">A recursive tree. Drag branches to change the split angle and attenuation.</p>
     <div class="demo-card">
+      <div class="demo-loss" id="loss-demo-tree">
+        <span>Loss</span><span class="loss-value">—</span>
+      </div>
       <div class="demo-canvas" id="demo-tree"></div>
       <div class="demo-code" data-target="#demo-tree">
         <textarea>return new G9((params) => {
@@ -470,6 +500,9 @@ return new G9((params) => {
     <h2>Snake</h2>
     <p class="desc">A chained polyline controlled by cumulative turn angles.</p>
     <div class="demo-card">
+      <div class="demo-loss" id="loss-demo-snake">
+        <span>Loss</span><span class="loss-value">—</span>
+      </div>
       <div class="demo-canvas" id="demo-snake"></div>
       <div class="demo-code" data-target="#demo-snake">
         <textarea>return new G9((params) => {
@@ -516,6 +549,9 @@ return new G9((params) => {
     <h2>Tongs</h2>
     <p class="desc">Linked segments with angle and opening controls.</p>
     <div class="demo-card">
+      <div class="demo-loss" id="loss-demo-tongs">
+        <span>Loss</span><span class="loss-value">—</span>
+      </div>
       <div class="demo-canvas" id="demo-tongs"></div>
       <div class="demo-code" data-target="#demo-tongs">
         <textarea>const rotate = (xy, a) => {
@@ -576,6 +612,9 @@ return new G9((params) => {
     <h2>Bezier</h2>
     <p class="desc">De Casteljau construction with draggable control points.</p>
     <div class="demo-card">
+      <div class="demo-loss" id="loss-demo-bezier">
+        <span>Loss</span><span class="loss-value">—</span>
+      </div>
       <div class="demo-canvas" id="demo-bezier"></div>
       <div class="demo-code" data-target="#demo-bezier">
         <textarea>return new G9((params) => {

@@ -120,6 +120,121 @@ run("line-search mode toggle keeps optimization stable", () => {
   }
 });
 
+run("line-search converges better with more iterations on rings", () => {
+  const prev = getG9LineSearchEnabled();
+  setG9LineSearchEnabled(true);
+  try {
+    const SIDES = 8;
+    const offsets: number[] = [];
+    for (let i = 0; i < SIDES; i++) offsets.push((i / SIDES) * Math.PI * 2);
+    const OFFSETS = np.array(offsets, { dtype: np.float32 });
+    const renderFn = (p: any) => {
+      const outerPt = (offset: any, angle: any, radius: any) => {
+        const a = angle.add(offset);
+        return np.concatenate([np.cos(a.ref).mul(radius.ref), np.sin(a).mul(radius)]);
+      };
+      const innerPt = (offset: any, angle: any, radius: any) => {
+        const a = angle.add(offset).neg();
+        return np.concatenate([np.cos(a.ref).mul(radius.ref), np.sin(a).mul(radius)]);
+      };
+      const vmapOuter = vmap(outerPt, [0, null, null]);
+      const vmapInner = vmap(innerPt, [0, null, null]);
+      const outerFlat = vmapOuter(OFFSETS.ref, p.angle.ref, p.radius.ref).reshape([SIDES * 2]);
+      const halfR = p.radius.div(2);
+      const innerFlat = vmapInner(OFFSETS.ref, p.angle, halfR).reshape([SIDES * 2]);
+      const pts: Record<string, any> = {};
+      for (let i = 0; i < SIDES; i++) {
+        const lo = i === SIDES - 1;
+        pts[`out${i}`] = point((lo ? outerFlat : outerFlat.ref).slice([i * 2, i * 2 + 2]));
+        const li = i === SIDES - 1;
+        pts[`in${i}`] = point((li ? innerFlat : innerFlat.ref).slice([i * 2, i * 2 + 2]), { fill: "#e11d48" });
+      }
+      return pts;
+    };
+    const lossFn = (target: any, coords: any) => {
+      const d = coords.out0.sub(target);
+      return d.ref.mul(d).sum();
+    };
+    const runWithIter = (iter: number) => {
+      const params: ParamState[] = [
+        { name: "radius", value: np.array([120], { dtype: np.float32 }) },
+        { name: "angle", value: np.array([0], { dtype: np.float32 }) },
+      ];
+      let cached: any = undefined;
+      for (const target of [[94, 0], [82, 0], [70, 0], [58, 0]]) {
+        cached = minimize(params, renderFn as any, lossFn as any, target, { radius: true }, iter, cached);
+      }
+      return Math.abs(toList(params[0].value)[0] - 58);
+    };
+
+    const err10 = runWithIter(10);
+    const err14 = runWithIter(14);
+    console.log(`line-search residual (10 vs 14 iters): ${err10.toFixed(4)} vs ${err14.toFixed(4)}`);
+    assert(err14 <= err10, `expected 14 iters to converge at least as well as 10 (${err14} > ${err10})`);
+  } finally {
+    setG9LineSearchEnabled(prev);
+  }
+});
+
+run("line-search converges better with more iterations on hard rings path", () => {
+  const prev = getG9LineSearchEnabled();
+  setG9LineSearchEnabled(true);
+  try {
+    const SIDES = 8;
+    const offsets: number[] = [];
+    for (let i = 0; i < SIDES; i++) offsets.push((i / SIDES) * Math.PI * 2);
+    const OFFSETS = np.array(offsets, { dtype: np.float32 });
+
+    const renderFn = (p: any) => {
+      const outerPt = (offset: any, angle: any, radius: any) => {
+        const a = angle.add(offset);
+        return np.concatenate([np.cos(a.ref).mul(radius.ref), np.sin(a).mul(radius)]);
+      };
+      const innerPt = (offset: any, angle: any, radius: any) => {
+        const a = angle.add(offset).neg();
+        return np.concatenate([np.cos(a.ref).mul(radius.ref), np.sin(a).mul(radius)]);
+      };
+      const vmapOuter = vmap(outerPt, [0, null, null]);
+      const vmapInner = vmap(innerPt, [0, null, null]);
+      const outerFlat = vmapOuter(OFFSETS.ref, p.angle.ref, p.radius.ref).reshape([SIDES * 2]);
+      const halfR = p.radius.div(2);
+      const innerFlat = vmapInner(OFFSETS.ref, p.angle, halfR).reshape([SIDES * 2]);
+      const pts: Record<string, any> = {};
+      for (let i = 0; i < SIDES; i++) {
+        const lo = i === SIDES - 1;
+        pts[`out${i}`] = point((lo ? outerFlat : outerFlat.ref).slice([i * 2, i * 2 + 2]));
+        const li = i === SIDES - 1;
+        pts[`in${i}`] = point((li ? innerFlat : innerFlat.ref).slice([i * 2, i * 2 + 2]));
+      }
+      return pts;
+    };
+    const lossFn = (target: any, coords: any) => {
+      const d = coords.out0.sub(target);
+      return d.ref.mul(d).sum();
+    };
+    const runWithIter = (iter: number) => {
+      const params: ParamState[] = [
+        { name: "radius", value: np.array([120], { dtype: np.float32 }) },
+        { name: "angle", value: np.array([0], { dtype: np.float32 }) },
+      ];
+      let cached: any = undefined;
+      const targets = [[120, 50], [70, -95], [10, 110], [95, -25], [58, 0]];
+      for (const target of targets) {
+        cached = minimize(params, renderFn as any, lossFn as any, target, null, iter, cached);
+      }
+      const out0 = toList(renderFn({ radius: params[0].value.ref, angle: params[1].value.ref }).out0.c);
+      return Math.hypot(out0[0] - 58, out0[1] - 0);
+    };
+
+    const err10 = runWithIter(10);
+    const err14 = runWithIter(14);
+    console.log(`hard line-search residual (10 vs 14 iters): ${err10.toFixed(4)} vs ${err14.toFixed(4)}`);
+    assert(err14 < err10, `expected 14 iterations to beat 10 on hard path (${err14} !< ${err10})`);
+  } finally {
+    setG9LineSearchEnabled(prev);
+  }
+});
+
 run("debug mode tracks average optimization loss", () => {
   const prevDebug = getG9DragDebugEnabled();
   setG9DragDebugEnabled(true);
@@ -139,6 +254,36 @@ run("debug mode tracks average optimization loss", () => {
   } finally {
     setG9DragDebugEnabled(prevDebug);
   }
+});
+
+run("optimize loss event includes container id and finite loss", () => {
+  const events: Array<{ containerId: string; loss: number }> = [];
+  const listeners = new Map<string, (event: any) => void>();
+  const host = installFakeDom();
+  (globalThis as any).document.addEventListener = (name: string, cb: (event: any) => void) => {
+    listeners.set(name, cb);
+  };
+  (globalThis as any).document.dispatchEvent = (event: { type: string; detail: any }) => {
+    if (event.type === "g9:opt-loss") events.push(event.detail);
+    const listener = listeners.get(event.type);
+    if (listener) listener(event);
+    return true;
+  };
+
+  const g9 = new G9(
+    (params: Record<string, any>) => ({ p1: point(params.xy) }),
+    { xy: [40, 0] },
+  );
+  g9.align("center", "center").insertInto("#demo-points");
+  const lossFn = (target: any, coords: any) => {
+    const d = coords.p1.sub(target);
+    return d.ref.mul(d).sum();
+  };
+
+  (g9 as any)._minimize("p1", lossFn, [52, 14], null, true, undefined);
+  assert(events.length > 0, "expected optimize loss events");
+  assert(events.some((e) => e.containerId === "demo-points"), "expected container id in optimize loss event");
+  assert(events.every((e) => Number.isFinite(e.loss)), "expected finite optimize loss values in events");
 });
 
 run("basic example render path works exactly as in main.ts", () => {

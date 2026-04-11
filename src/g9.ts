@@ -56,6 +56,9 @@ export function line(
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const MOBILE_POINT_RADIUS_SCALE = 1.35;
+const DRAG_ITER_ADAPTIVE = 10;
+const DRAG_ITER_LINE_SEARCH = 18;
+const DRAG_RENDER_EVERY = 2;
 let activeDragCount = 0;
 let dragDebugEnabled = false;
 let lineSearchEnabled = false;
@@ -132,6 +135,18 @@ export function getG9DebugLossStats(): { average: number; count: number; last: n
   };
 }
 
+type LossListener = (loss: number | null) => void;
+const g9LossListeners = new Set<LossListener>();
+
+export function onG9LossUpdate(listener: LossListener): () => void {
+  g9LossListeners.add(listener);
+  return () => g9LossListeners.delete(listener);
+}
+
+function emitG9Loss(loss: number | null): void {
+  for (const listener of g9LossListeners) listener(loss);
+}
+
 function markDraggable(el: SVGElement): void {
   el.style.touchAction = "none";
   el.style.userSelect = "none";
@@ -160,6 +175,13 @@ function toJSArr(arr: any): number[] {
 function evalLoss(jitLoss: any, targetLen: number, x: number[], combinedBuffer: Float32Array): number {
   for (let i = 0; i < x.length; i++) combinedBuffer[targetLen + i] = x[i];
   return Number(toJS(jitLoss(np.array(combinedBuffer, { dtype: np.float32 }))));
+}
+
+function emitOptimizeLoss(containerId: string | null, loss: number): void {
+  if (!containerId || typeof document === "undefined" || !Number.isFinite(loss)) return;
+  document.dispatchEvent(new CustomEvent("g9:opt-loss", {
+    detail: { containerId, loss },
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -244,6 +266,7 @@ type CachedJit = {
   renderIds: string[];
   targetLen: number;
   lastX: number[];
+  lastLoss: number;
   affectsRef: Record<string, any> | null | undefined;
   affectsMask: Float64Array | null;
   combinedBuffer: Float32Array;
@@ -275,6 +298,7 @@ export function minimize(
       jitRender: null,
       renderIds: [],
       targetLen: 0,
+      lastLoss: 0,
       lastX: [],
       affectsRef: null,
       affectsMask: null,
@@ -364,6 +388,7 @@ export function minimize(
       jitRender,
       renderIds,
       targetLen: tLen,
+      lastLoss: cached?.lastLoss ?? 0,
       lastX: [],
       affectsRef: null,
       affectsMask: null,
@@ -440,13 +465,11 @@ export function minimize(
     }
   }
 
-  if (dragDebugEnabled) {
-    const loss = evalLoss(jitLoss, tLen, x, combinedBuffer);
-    if (Number.isFinite(loss)) {
-      debugLossStats.sum += loss;
-      debugLossStats.count += 1;
-      debugLossStats.last = loss;
-    }
+  const loss = evalLoss(jitLoss, tLen, x, combinedBuffer);
+  if (dragDebugEnabled && Number.isFinite(loss)) {
+    debugLossStats.sum += loss;
+    debugLossStats.count += 1;
+    debugLossStats.last = loss;
   }
 
   writeVec(params, sizes, x);
@@ -456,6 +479,7 @@ export function minimize(
     jitRender,
     renderIds,
     targetLen: tLen,
+    lastLoss: Number.isFinite(loss) ? loss : 0,
     lastX: x,
     affectsRef: affects,
     affectsMask,
@@ -488,6 +512,7 @@ class PointEl {
       lossFn: LossFn,
       target: number[],
       affects: Record<string, any> | null | undefined,
+      forceRender: boolean,
       cached?: CachedJit,
     ) => CachedJit,
     g9: G9,
@@ -512,11 +537,15 @@ class PointEl {
         drag: (dx, dy) => {
           const pullX = c0[0] + dx;
           const pullY = c0[1] + dy;
-          this._cached = doMinimize(id, lossFn, [pullX, pullY], this.args.affects, this._cached);
+          this._cached = doMinimize(id, lossFn, [pullX, pullY], this.args.affects, false, this._cached);
           const model = this._cachedCoords;
           this.g9.setDragDebug([pullX, pullY], [model[0], model[1]]);
         },
-        end: () => this.g9.clearDragDebug(),
+        end: () => {
+          const c = this._cachedCoords;
+          this._cached = doMinimize(id, lossFn, [c[0], c[1]], this.args.affects, true, this._cached);
+          this.g9.clearDragDebug();
+        },
       };
     });
   }
@@ -557,6 +586,7 @@ class LineEl {
       lossFn: LossFn,
       target: number[],
       affects: Record<string, any> | null | undefined,
+      forceRender: boolean,
       cached?: CachedJit,
     ) => CachedJit,
     g9: G9,
@@ -596,13 +626,20 @@ class LineEl {
         drag: (dx, dy) => {
           const pullX = cx + dx;
           const pullY = cy + dy;
-          this._cached = doMinimize(id, lossFn, [pullX, pullY, r], this.args.affects, this._cached);
+          this._cached = doMinimize(id, lossFn, [pullX, pullY, r], this.args.affects, false, this._cached);
           const model = this._cachedCoords;
           const targetX = model[0] + (model[2] - model[0]) * r;
           const targetY = model[1] + (model[3] - model[1]) * r;
           this.g9.setDragDebug([pullX, pullY], [targetX, targetY]);
         },
-        end: () => this.g9.clearDragDebug(),
+        end: () => {
+          const c = this._cachedCoords;
+          const ldx = c[2] - c[0], ldy = c[3] - c[1];
+          const ll2 = ldx * ldx + ldy * ldy;
+          const rr = ll2 > 0 ? ((cx - c[0]) * ldx + (cy - c[1]) * ldy) / ll2 : r;
+          this._cached = doMinimize(id, lossFn, [cx, cy, rr], this.args.affects, true, this._cached);
+          this.g9.clearDragDebug();
+        },
       };
     });
   }
@@ -728,6 +765,7 @@ export class G9 {
   elements: Record<string, PointEl | LineEl>;
   node: SVGSVGElement;
   parent: Element | null;
+  containerId: string | null;
   xAlign: string;
   yAlign: string;
   xOff: number;
@@ -735,6 +773,7 @@ export class G9 {
   _rect: DOMRect | null;
   _debugPullEl: SVGCircleElement | null;
   _debugTargetEl: SVGCircleElement | null;
+  _dragRenderCounter: number;
 
   constructor(
     renderFn: RenderFn,
@@ -752,6 +791,7 @@ export class G9 {
     this.node.style.height = "100%";
     this.node.style.overflow = "visible";
     this.parent = null;
+    this.containerId = null;
     this.xAlign = "center";
     this.yAlign = "center";
     this.xOff = 0;
@@ -759,6 +799,7 @@ export class G9 {
     this._rect = null;
     this._debugPullEl = null;
     this._debugTargetEl = null;
+    this._dragRenderCounter = 0;
     liveG9Instances.add(this);
   }
 
@@ -837,6 +878,7 @@ export class G9 {
 
   insertInto(sel: string | Element): this {
     this.parent = typeof sel === "string" ? document.querySelector(sel) : sel;
+    this.containerId = typeof sel === "string" && sel.startsWith("#") ? sel.slice(1) : null;
     this.parent.textContent = "";
     this.parent.appendChild(this.node);
     const h = () => this.resize();
@@ -907,6 +949,7 @@ export class G9 {
       renderIds,
       targetLen: tLen,
       lastX: x,
+      lastLoss: 0,
       affectsRef: null,
       affectsMask: null,
       combinedBuffer: new Float32Array(tLen + dim),
@@ -923,10 +966,17 @@ export class G9 {
     lossFn: LossFn,
     target: number[],
     affects: Record<string, any> | null | undefined,
+    forceRender = false,
     cached?: CachedJit,
   ): CachedJit {
-    const c = minimize(this.params, this.renderFn, lossFn, target, affects, 8, cached);
-    this._renderFast(c);
+    const dragIterations = lineSearchEnabled ? DRAG_ITER_LINE_SEARCH : DRAG_ITER_ADAPTIVE;
+    const c = minimize(this.params, this.renderFn, lossFn, target, affects, dragIterations, cached);
+    emitOptimizeLoss(this.containerId, c.lastLoss);
+    this._dragRenderCounter += 1;
+    if (forceRender || this._dragRenderCounter % DRAG_RENDER_EVERY === 0) {
+      this._renderFast(c);
+      this._dragRenderCounter = 0;
+    }
     return c;
   }
 

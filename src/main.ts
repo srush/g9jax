@@ -27,6 +27,16 @@ function setBanner(msg: string) {
   if (el) el.innerHTML = msg;
 }
 
+function updateDemoLoss(card: Element | null, loss: number | null): void {
+  const lossEl = card?.querySelector(".demo-loss-value");
+  if (!(lossEl instanceof HTMLElement)) return;
+  if (loss == null || !Number.isFinite(loss)) {
+    lossEl.textContent = "—";
+    return;
+  }
+  lossEl.textContent = loss.toExponential(3);
+}
+
 function nextFrame(): Promise<void> {
   return new Promise((resolve) => requestAnimationFrame(() => resolve()));
 }
@@ -39,9 +49,11 @@ function runDemoFromTextarea(sectionId: string, canvasSelector: string) {
   show(sectionId);
   const textarea = section.querySelector("textarea");
   if (!textarea) return;
+  const card = section.querySelector(`.demo-code[data-target="${canvasSelector}"]`);
   const existing = demoMountState.get(canvasSelector);
   if (existing) {
     existing.render();
+    updateDemoLoss(card, null);
     return;
   }
   const fn = new Function("G9", "point", "line", "np", "jit", "vmap", textarea.value);
@@ -49,6 +61,7 @@ function runDemoFromTextarea(sectionId: string, canvasSelector: string) {
   if (g9 instanceof G9) {
     g9.align("center", "center").insertInto(canvasSelector);
     demoMountState.set(canvasSelector, g9);
+    updateDemoLoss(card, null);
   }
 }
 
@@ -80,6 +93,16 @@ function bindRunButtons(): void {
     } catch (error: any) {
       setRunError(card, String(error?.message ?? error));
     }
+  });
+}
+
+function bindDemoLossRows(): void {
+  document.addEventListener("g9:opt-loss", (event) => {
+    const custom = event as CustomEvent<{ containerId: string; loss: number }>;
+    const containerId = custom.detail?.containerId;
+    if (!containerId) return;
+    const card = document.querySelector(`.demo-code[data-target="#${containerId}"]`);
+    updateDemoLoss(card, custom.detail?.loss ?? null);
   });
 }
 
@@ -169,6 +192,7 @@ async function main() {
   }
 
   bindRunButtons();
+  bindDemoLossRows();
   bindDebugControls();
 
   const demos = [
