@@ -517,6 +517,27 @@ run("cube demo render path works and stays finite", () => {
   const finalP0 = toList(finalShapes.p0.c);
   const finalLoss = (finalP0[0] - target[0]) ** 2 + (finalP0[1] - target[1]) ** 2;
   assert(finalLoss < initialLoss, `cube p0 should move toward target, loss ${initialLoss} -> ${finalLoss}`);
+  const runCubeWithIter = (iter: number) => {
+    const runParams: ParamState[] = [
+      { name: "ax", value: np.array([initialAx], { dtype: np.float32 }) },
+      { name: "ay", value: np.array([initialAy], { dtype: np.float32 }) },
+    ];
+    minimize(runParams, renderFn as any, lossFn as any, target, { ax: true, ay: true }, iter);
+    const runAx = toList(runParams[0].value)[0];
+    const runAy = toList(runParams[1].value)[0];
+    const runShapes = renderFn({
+      ax: np.array([runAx], { dtype: np.float32 }),
+      ay: np.array([runAy], { dtype: np.float32 }),
+    });
+    const runP0 = toList(runShapes.p0.c);
+    return (runP0[0] - target[0]) ** 2 + (runP0[1] - target[1]) ** 2;
+  };
+  const cubeLossIter2 = runCubeWithIter(2);
+  const cubeLossIter8 = runCubeWithIter(8);
+  assert(
+    cubeLossIter8 < cubeLossIter2,
+    `cube should improve with more iterations, loss ${cubeLossIter2} -> ${cubeLossIter8}`,
+  );
 });
 
 run("line drag loss minimizes", () => {
@@ -804,6 +825,22 @@ run("dragon render survives optimization path", () => {
   assert(toAfter.every(Number.isFinite), "dragon toPt should remain finite");
   assert(squarenessAfter.every(Number.isFinite), "dragon squareness should remain finite");
   assert(finalLoss < initialLoss, `dragon start point should move toward target, loss ${initialLoss} -> ${finalLoss}`);
+  const runDragonWithIter = (iter: number) => {
+    const runParams: ParamState[] = [
+      { name: "fromPt", value: np.array([175, 96], { dtype: np.float32 }) },
+      { name: "toPt", value: np.array([-175, 39], { dtype: np.float32 }) },
+      { name: "squareness", value: np.array([0.8], { dtype: np.float32 }) },
+    ];
+    minimize(runParams, renderFn, lossFn, target, null, iter);
+    const runFrom = toList(runParams[0].value);
+    return (runFrom[0] - target[0]) ** 2 + (runFrom[1] - target[1]) ** 2;
+  };
+  const dragonLossIter1 = runDragonWithIter(1);
+  const dragonLossIter6 = runDragonWithIter(6);
+  assert(
+    dragonLossIter6 < dragonLossIter1,
+    `dragon should improve with more iterations, loss ${dragonLossIter1} -> ${dragonLossIter6}`,
+  );
 });
 
 run("tree render survives optimization path", () => {
