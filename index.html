@@ -284,7 +284,10 @@
 return new G9((params) => {
   const xy = params.xy;
   const p2 = np.dot(FLIP.ref, xy.ref);
-  return { p1: point(xy), p2: point(p2) };
+  return {
+    p1: point(xy, { affects: {xy: true}, opt: {regWeight: [0]} }),
+    p2: point(p2, { affects: {xy: true}, opt: {regWeight: [0]} }),
+  };
 }, { xy: [40, 0] });</textarea>
         <button class="run-btn">Run ▶</button>
         <div class="error-msg"></div>
@@ -338,6 +341,7 @@ return new G9((params) => {
     pts["pt" + index] = point(coords, {
       fill: LEVEL_COLORS[level],
       r: level === 0 ? 4 : 3,
+      opt: {regWeight: [0]},
     });
     return null;
   });
@@ -476,6 +480,7 @@ return new G9((params) => {
     fill: "#f97316",
     r: 7,
     affects: {rx: true, ry: true},
+    opt: {regWeight: [0]},
   });
   return shapes;
 }, {rx: [0], ry: [0]});</textarea>
@@ -704,6 +709,7 @@ return new G9((params) => {
       fill: "#f97316",
       r: 8,
       affects: {bx: true, by: true},
+      opt: {regWeight: [1]},
     }),
   };
   return {
@@ -749,7 +755,7 @@ return new G9((params) => {
       dragon(mid, toPt, 1, level-1, name+"r");
     }
   }
-  dragon(params.fromPt.ref, params.toPt.ref, -1, 5, "");
+  dragon(params.fromPt.ref, params.toPt.ref, -1, 6, "");
   pts["from"] = point(params.fromPt.ref,
     {fill: "#0ea5e9", r: 6});
   pts["to"] = point(params.toPt.ref,
@@ -776,6 +782,11 @@ return new G9((params) => {
         <textarea>return new G9((params) => {
   const pts = {};
   const PI_180 = Math.PI / 180;
+  const branchTilt = (depth) =>
+    depth === 4 ? params.d4
+      : depth === 3 ? params.d3
+        : depth === 2 ? params.d2
+          : params.d1;
   function branch(base, length, angle, depth, name) {
     const rad = angle.ref.mul(PI_180);
     const dx = np.cos(rad.ref);
@@ -789,13 +800,13 @@ return new G9((params) => {
     });
     pts["pt"+name] = point(tip.ref,
       {fill: "#22c55e", r: 3,
-       affects: {deltaAngle: true, attenuation: true}});
+       affects: {[`d${Math.max(1, depth)}`]: true}});
     if (depth > 0) {
       const nl1 = length.ref.mul(params.attenuation.ref);
-      const la = angle.ref.add(params.deltaAngle.ref);
+      const la = angle.ref.add(branchTilt(depth).ref);
       branch(tip.ref, nl1, la, depth-1, name+"l");
       const nl2 = length.mul(params.attenuation.ref);
-      const ra = angle.sub(params.deltaAngle.ref);
+      const ra = angle.sub(branchTilt(depth).ref);
       branch(tip, nl2, ra, depth-1, name+"r");
     }
   }
@@ -806,8 +817,14 @@ return new G9((params) => {
     {fill: "#8B4513", r: 5,
      affects: {startLength: true}});
   return pts;
-}, {deltaAngle: [33], startLength: [65],
-    attenuation: [0.7]});</textarea>
+}, {
+  d4: [33],
+  d3: [29],
+  d2: [26],
+  d1: [22],
+  startLength: [65],
+  attenuation: [0.7],
+});</textarea>
         <button class="run-btn">Run ▶</button>
         <div class="error-msg"></div>
       </div>
@@ -830,7 +847,12 @@ return new G9((params) => {
   const segmentLength = 36;
   let angle = np.array([0], {dtype: np.float32});
   let head = np.concatenate([params.x.ref, params.y.ref]);
-  pts.p0 = point(head.ref, {fill: "#ef4444", r: 7, affects: {x: true, y: true}});
+  pts.p0 = point(head.ref, {
+    fill: "#ef4444",
+    r: 7,
+    affects: {x: true, y: true},
+    opt: {regWeight: [0]},
+  });
 
   for (let i = 0; i < turns.length; i++) {
     const turnAffects = i === 0
@@ -851,8 +873,14 @@ return new G9((params) => {
       "stroke-width": 5 - i,
       "stroke-linecap": "round",
       affects: turnAffects,
+      opt: {regWeight: [0]},
     });
-    pts["p" + (i + 1)] = point(next.ref, {fill: "#0ea5e9", r: 5, affects: turnAffects});
+    pts["p" + (i + 1)] = point(next.ref, {
+      fill: "#0ea5e9",
+      r: 5,
+      affects: turnAffects,
+      opt: {regWeight: [0]},
+    });
     head = next;
   }
   return pts;
