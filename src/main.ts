@@ -9,6 +9,7 @@ import {
   getG9DebugLossStats,
 } from "./g9";
 import { defaultDevice, init, vmap, type Device } from "@jax-js/jax";
+import { shouldReuseMountedDemo } from "./demo-run-policy";
 
 function show(id: string) {
   const el = document.getElementById(id);
@@ -48,26 +49,35 @@ function nextFrame(): Promise<void> {
 }
 
 const demoMountState = new Map<string, G9>();
+const demoSourceState = new Map<string, string>();
 const queuedDemoTargets = new Set<string>();
 
-function runDemoFromTextarea(sectionId: string, canvasSelector: string) {
+function runDemoFromTextarea(sectionId: string, canvasSelector: string, forceRemount = false) {
   const section = document.getElementById(sectionId);
   if (!section) return;
   show(sectionId);
   const textarea = section.querySelector("textarea");
   if (!textarea) return;
+  const source = textarea.value;
   const card = section.querySelector(`.demo-code[data-target="${canvasSelector}"]`);
   const existing = demoMountState.get(canvasSelector);
-  if (existing) {
+  const previousSource = demoSourceState.get(canvasSelector);
+  if (shouldReuseMountedDemo(canvasSelector, !!existing, previousSource, source, forceRemount)) {
     existing.render();
     updateDemoLoss(card, null);
     return;
   }
-  const fn = new Function("G9", "point", "line", "np", "jit", "vmap", textarea.value);
+
+  const fn = new Function("G9", "point", "line", "np", "jit", "vmap", source);
   const g9 = fn(G9, point, line, np, jit, vmap);
   if (g9 instanceof G9) {
+    if (existing) {
+      existing.destroy();
+      demoMountState.delete(canvasSelector);
+    }
     g9.align("center", "center").insertInto(canvasSelector);
     demoMountState.set(canvasSelector, g9);
+    demoSourceState.set(canvasSelector, source);
     updateDemoLoss(card, null);
   }
 }
@@ -82,7 +92,7 @@ function runDemoFromCard(card: Element): void {
   const sectionId = section?.id ?? "";
   const canvasSelector = card instanceof HTMLElement ? card.dataset.target ?? "" : "";
   if (!sectionId || !canvasSelector) return;
-  runDemoFromTextarea(sectionId, canvasSelector);
+  runDemoFromTextarea(sectionId, canvasSelector, true);
 }
 
 function bindRunButtons(): void {
@@ -159,6 +169,14 @@ function bindDebugControls(): void {
 }
 (window as any).__g9SetDragDebugEnabled = setG9DragDebugEnabled;
 (window as any).__g9GetDragDebugEnabled = getG9DragDebugEnabled;
+
+function moveDemoSection(sectionId: string, beforeSectionId: string): void {
+  const section = document.getElementById(sectionId);
+  const before = document.getElementById(beforeSectionId);
+  const parent = before?.parentElement;
+  if (!section || !before || !parent) return;
+  parent.insertBefore(section, before);
+}
 
 type DemoSpec = { sectionId: string; canvasSelector: string };
 
@@ -294,18 +312,19 @@ async function main() {
   bindRunButtons();
   bindDemoLossRows();
   bindDebugControls();
+  moveDemoSection("section-tongs", "section-blocker");
 
   const demos: DemoSpec[] = [
     ["section-points", "#demo-points"],
     ["section-rings", "#demo-rings"],
-    ["section-classifier", "#demo-classifier"],
+    ["section-cube", "#demo-cube"],
     ["section-lines", "#demo-lines"],
+    ["section-tongs", "#demo-tongs"],
     ["section-blocker", "#demo-blocker"],
     ["section-particles", "#demo-particles"],
     ["section-dragon", "#demo-dragon"],
     ["section-tree", "#demo-tree"],
     ["section-snake", "#demo-snake"],
-    ["section-tongs", "#demo-tongs"],
   ].map(([sectionId, canvasSelector]) => ({ sectionId, canvasSelector }));
 
   // Unhide sections first for layout consistency.

@@ -371,6 +371,81 @@ return new G9((params) => {
     </div>
   </div>
 
+  <!-- Demo: Cube -->
+  <div class="demo-section" id="section-cube" style="display:none">
+    <h2>Cube</h2>
+    <p class="desc">Drag cube edges to rotate a projected 3D wireframe.</p>
+    <div class="demo-card">
+      <div class="demo-loss" id="loss-demo-cube">
+        <span>Loss</span><span class="loss-value">—</span>
+      </div>
+      <div class="demo-canvas" id="demo-cube"></div>
+      <div class="demo-code" data-target="#demo-cube">
+        <textarea>const SCALE = np.array([260], {dtype: np.float32});
+const Z_SHIFT = np.array([2.2], {dtype: np.float32});
+const BASE = [
+  [np.array([-0.5], {dtype: np.float32}), np.array([-0.5], {dtype: np.float32}), np.array([-0.5], {dtype: np.float32})],
+  [np.array([-0.5], {dtype: np.float32}), np.array([-0.5], {dtype: np.float32}), np.array([0.5], {dtype: np.float32})],
+  [np.array([-0.5], {dtype: np.float32}), np.array([0.5], {dtype: np.float32}), np.array([-0.5], {dtype: np.float32})],
+  [np.array([-0.5], {dtype: np.float32}), np.array([0.5], {dtype: np.float32}), np.array([0.5], {dtype: np.float32})],
+  [np.array([0.5], {dtype: np.float32}), np.array([-0.5], {dtype: np.float32}), np.array([-0.5], {dtype: np.float32})],
+  [np.array([0.5], {dtype: np.float32}), np.array([-0.5], {dtype: np.float32}), np.array([0.5], {dtype: np.float32})],
+  [np.array([0.5], {dtype: np.float32}), np.array([0.5], {dtype: np.float32}), np.array([-0.5], {dtype: np.float32})],
+  [np.array([0.5], {dtype: np.float32}), np.array([0.5], {dtype: np.float32}), np.array([0.5], {dtype: np.float32})],
+];
+const EDGES = [
+  [0, 1], [0, 2], [0, 4],
+  [1, 3], [1, 5],
+  [2, 3], [2, 6],
+  [3, 7],
+  [4, 5], [4, 6],
+  [5, 7], [6, 7],
+];
+
+const projectPoint = (x0, y0, z0, axCos, axSin, ayCos, aySin) => {
+  const x1 = x0.ref.mul(ayCos.ref).add(z0.ref.mul(aySin.ref));
+  const y1 = y0;
+  const z1 = z0.ref.mul(ayCos.ref).sub(x0.ref.mul(aySin.ref));
+  const x2 = x1;
+  const y2 = y1.ref.mul(axCos.ref).sub(z1.ref.mul(axSin.ref));
+  const z2 = y1.ref.mul(axSin.ref).add(z1.ref.mul(axCos.ref));
+  const depth = z2.ref.add(Z_SHIFT.ref);
+  const px = x2.ref.mul(SCALE.ref).div(depth.ref);
+  const py = y2.ref.mul(SCALE.ref).div(depth.ref);
+  return np.concatenate([px, py]);
+};
+
+return new G9((params) => {
+  const axCos = np.cos(params.ax.ref);
+  const axSin = np.sin(params.ax.ref);
+  const ayCos = np.cos(params.ay.ref);
+  const aySin = np.sin(params.ay.ref);
+  const projectAt = (idx) => {
+    const [x0, y0, z0] = BASE[idx];
+    return projectPoint(x0, y0, z0, axCos, axSin, ayCos, aySin);
+  };
+  const shapes = {};
+  EDGES.forEach(([a, b], i) => {
+    const aPt = projectAt(a);
+    const bPt = projectAt(b);
+    shapes["e" + i] = line(np.concatenate([aPt.ref, bPt.ref]), {
+      stroke: "#111827",
+      "stroke-width": 8,
+      "stroke-linecap": "round",
+      affects: {ax: true, ay: true},
+    });
+  });
+  BASE.forEach((_unused, i) => {
+    shapes["p" + i] = point(projectAt(i), {fill: "#0ea5e9", r: 4, affects: {ax: true, ay: true}});
+  });
+  return shapes;
+}, {ax: [0.2], ay: [0.45]});</textarea>
+        <button class="run-btn">Run ▶</button>
+        <div class="error-msg"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- Demo: Particles -->
   <div class="demo-section" id="section-particles" style="display:none">
     <h2>Particles (100)</h2>
@@ -428,7 +503,7 @@ return new G9((params) => {
     </div>
   </div>
 
-  <!-- Demo: Mini Classifier -->
+  <!-- Demo: Mini Classifier (temporarily disabled from auto-mount) -->
   <div class="demo-section" id="section-classifier" style="display:none">
     <h2>Mini Classifier (2-layer, 10 params)</h2>
     <p class="desc">Drag blue/red data points; side parameter points and network weights update to fit classification.</p>
@@ -438,7 +513,7 @@ return new G9((params) => {
       </div>
       <div class="demo-canvas" id="demo-classifier"></div>
       <div class="demo-code" data-target="#demo-classifier">
-        <textarea>const GRID = 25;
+        <textarea>const GRID = 17;
 const CELL_COUNT = GRID * GRID;
 const AXIS_MIN = -120;
 const AXIS_MAX = 120;
@@ -448,7 +523,7 @@ const RED_BG = "#fee2e2";
 const BLUE_PT = "#2563eb";
 const RED_PT = "#ef4444";
 const PARAM_PT = "#8b5cf6";
-const HIDE = np.array([5000, 5000], {dtype: np.float32});
+const HIDE = np.array([3600, 3600], {dtype: np.float32});
 const ONE = np.array([1], {dtype: np.float32});
 const SHARP = np.array([10], {dtype: np.float32});
 
@@ -590,7 +665,7 @@ return new G9((params) => ({
   <!-- Demo: Blocker Wall -->
   <div class="demo-section" id="section-blocker" style="display:none">
     <h2>Blocker Wall</h2>
-    <p class="desc">Drag the orange ball. Crossing between the black wall lines adds a <code>-10000</code> secondary score.</p>
+    <p class="desc">Drag the orange ball. The entire lane between the two thick black walls is blocked with a strong secondary penalty.</p>
     <div class="demo-card">
       <div class="demo-loss" id="loss-demo-blocker">
         <span>Loss</span><span class="loss-value">—</span>
@@ -598,14 +673,15 @@ return new G9((params) => ({
       <div class="demo-canvas" id="demo-blocker"></div>
       <div class="demo-code" data-target="#demo-blocker">
         <textarea>const ONE = np.array([1], {dtype: np.float32});
-const SHARP = np.array([0.35], {dtype: np.float32});
-const WALL_SECONDARY = np.array([-10000], {dtype: np.float32});
-const WALL_X0 = np.array([-20], {dtype: np.float32});
-const WALL_X1 = np.array([20], {dtype: np.float32});
+const SHARP = np.array([0.55], {dtype: np.float32});
+const WALL_SECONDARY = np.array([12000], {dtype: np.float32});
+const WALL_X0 = np.array([12], {dtype: np.float32});
+const WALL_X1 = np.array([96], {dtype: np.float32});
+const WALL_HALF_WIDTH = np.array([22], {dtype: np.float32});
 const WALL_Y0 = np.array([-130], {dtype: np.float32});
 const WALL_Y1 = np.array([130], {dtype: np.float32});
-const WALL_LEFT_SEG = np.array([-20, -130, -20, 130], {dtype: np.float32});
-const WALL_RIGHT_SEG = np.array([20, -130, 20, 130], {dtype: np.float32});
+const WALL_LEFT_SEG = np.array([12, -130, 12, 130], {dtype: np.float32});
+const WALL_RIGHT_SEG = np.array([96, -130, 96, 130], {dtype: np.float32});
 
 return new G9((params) => {
   const sigmoid = (x) => ONE.ref.div(ONE.ref.add(np.exp(x.neg())));
@@ -615,19 +691,21 @@ return new G9((params) => {
     return geMin.ref.mul(leMax.ref);
   };
 
-  const inWallX = insideBand(params.bx, WALL_X0, WALL_X1);
+  const wallMinX = WALL_X0.ref.sub(WALL_HALF_WIDTH.ref);
+  const wallMaxX = WALL_X1.ref.add(WALL_HALF_WIDTH.ref);
+  const inWallX = insideBand(params.bx, wallMinX, wallMaxX);
   const inWallY = insideBand(params.by, WALL_Y0, WALL_Y1);
   const inWall = inWallX.ref.mul(inWallY.ref);
 
   const shapes = {
-    wallLeft: line(WALL_LEFT_SEG, {
+    wallLeft: line(WALL_LEFT_SEG.ref, {
       stroke: "#111827",
-      "stroke-width": 16,
+      "stroke-width": 44,
       "stroke-linecap": "round",
     }),
-    wallRight: line(WALL_RIGHT_SEG, {
+    wallRight: line(WALL_RIGHT_SEG.ref, {
       stroke: "#111827",
-      "stroke-width": 16,
+      "stroke-width": 44,
       "stroke-linecap": "round",
     }),
     ball: point(np.concatenate([params.bx.ref, params.by.ref]), {
