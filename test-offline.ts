@@ -601,7 +601,7 @@ run("constrained line responds to horizontal drag in one move event", () => {
   const { host, dispatchDocumentEvent } = installInteractiveFakeDom();
   const g9 = new G9(
     (params: Record<string, any>) => ({
-      l2: line(params.line2, { affects: { line2: [1, 1, 0, 0] } }),
+      l2: line(params.line2, { affects: { line2: [1, 1, 0, 0] }, opt: { dragIter: [24], regWeight: [0] } }),
     }),
     {
       line2: [-100, 0, 100, 0],
@@ -723,7 +723,7 @@ run("line drag end does not snap back to drag start", () => {
   const g9 = new G9(
     (params: Record<string, any>) => ({
       l1: line(params.line1),
-      l2: line(params.line2, { affects: { line2: [1, 1, 0, 0] } }),
+      l2: line(params.line2, { affects: { line2: [1, 1, 0, 0] }, opt: { dragIter: [24], regWeight: [0] } }),
       l3: line(params.line3, { affects: { line3: [1, 0, 0, 1] } }),
     }),
     {
@@ -816,7 +816,7 @@ run("shape opt controls iterations without masking params", () => {
     const d = coords.p.sub(target);
     return d.ref.mul(d).sum();
   };
-  (g9 as any)._minimize("p", lossFn, [30, -12], { xy: true }, true, undefined, { dragIter: [6] });
+  (g9 as any)._minimize("p", lossFn, [30, -12], { xy: true }, true, undefined, { dragIter: [6], regWeight: [0] });
   const moved = toList((g9 as any).params[0].value);
   assert(
     Math.hypot(moved[0], moved[1]) > 1,
@@ -828,7 +828,7 @@ run("shape opt controls iterations without masking params", () => {
     { xy: [0, 0] },
   );
   g9Masked.align("center", "center").insertInto(host as any);
-  (g9Masked as any)._minimize("p", lossFn, [30, -12], {}, true, undefined, { dragIter: [6] });
+  (g9Masked as any)._minimize("p", lossFn, [30, -12], {}, true, undefined, { dragIter: [6], regWeight: [0] });
   const stayed = toList((g9Masked as any).params[0].value);
   assert(
     Math.hypot(stayed[0], stayed[1]) < 1e-6,
