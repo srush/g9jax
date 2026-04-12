@@ -670,6 +670,54 @@ run("line drag debug markers are visible during drag and hidden on release", () 
   }
 });
 
+run("touch drag uses changedTouches fallback and shows debug markers", () => {
+  const prevDebug = getG9DragDebugEnabled();
+  setG9DragDebugEnabled(true);
+  try {
+    const { host, dispatchDocumentEvent } = installInteractiveFakeDom();
+    const g9 = new G9(
+      (params: Record<string, any>) => ({
+        l2: line(params.line2, { affects: { line2: [1, 1, 0, 0] } }),
+      }),
+      {
+        line2: [-100, 0, 100, 0],
+      },
+    );
+    g9.align("center", "center").insertInto(host as any);
+
+    const lineEl = ((g9 as any).elements.l2 as any).el as FakeElement;
+    const touchEvent = (
+      touches: Array<[number, number]>,
+      changedTouches: Array<[number, number]> = touches,
+    ) => ({
+      touches: touches.map(([clientX, clientY]) => ({ clientX, clientY })),
+      changedTouches: changedTouches.map(([clientX, clientY]) => ({ clientX, clientY })),
+      cancelable: true,
+      stopPropagation: () => {},
+      preventDefault: () => {},
+    });
+
+    lineEl.dispatch("touchstart", touchEvent([[400, 300]]));
+    // Simulate mobile event shape where touches can be empty but changedTouches carries the pointer.
+    dispatchDocumentEvent("touchmove", touchEvent([], [[455, 300]]));
+    const pullMarker = (g9 as any)._debugPullEl as FakeElement | null;
+    const targetMarker = (g9 as any)._debugTargetEl as FakeElement | null;
+    assert(!!pullMarker && !!targetMarker, "expected debug markers to be created on touch drag");
+    assert(
+      pullMarker.style.display !== "none" && targetMarker.style.display !== "none",
+      "expected debug markers to be visible while touch dragging",
+    );
+
+    dispatchDocumentEvent("touchend", touchEvent([], [[455, 300]]));
+    assert(
+      pullMarker.style.display === "none" && targetMarker.style.display === "none",
+      "expected debug markers to hide after touch drag end",
+    );
+  } finally {
+    setG9DragDebugEnabled(prevDebug);
+  }
+});
+
 run("line drag end does not snap back to drag start", () => {
   const { host, dispatchDocumentEvent } = installInteractiveFakeDom();
   const g9 = new G9(

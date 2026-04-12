@@ -1091,8 +1091,16 @@ function addDrag(
     }
   };
 
-  function firstPointer(event: MouseEvent | TouchEvent): MouseEvent | Touch {
-    return "touches" in event ? event.touches[0] : event;
+  function firstPointer(event: MouseEvent | TouchEvent): MouseEvent | Touch | null {
+    if ("touches" in event) {
+      const primaryTouch = event.touches && event.touches.length > 0
+        ? event.touches[0]
+        : event.changedTouches && event.changedTouches.length > 0
+          ? event.changedTouches[0]
+          : null;
+      return primaryTouch ?? null;
+    }
+    return event;
   }
 
   function start(e: MouseEvent | TouchEvent) {
@@ -1101,6 +1109,11 @@ function addDrag(
     beginGlobalDrag();
     el.classList.add("g9-active-drag");
     const f = firstPointer(e);
+    if (!f) {
+      el.classList.remove("g9-active-drag");
+      endGlobalDrag();
+      return;
+    }
     let session: DragSession;
     try {
       session = onStartCb(f);
@@ -1128,6 +1141,7 @@ function addDrag(
       ev.stopPropagation();
       if (ev.cancelable) ev.preventDefault();
       const m = firstPointer(ev);
+      if (!m) return;
       latestDx = m.clientX - sx;
       latestDy = m.clientY - sy;
       if (!hasMoved && (Math.abs(latestDx) > 0.25 || Math.abs(latestDy) > 0.25)) {
