@@ -50,7 +50,7 @@ function nextFrame(): Promise<void> {
 const demoMountState = new Map<string, G9>();
 const queuedDemoTargets = new Set<string>();
 
-function runDemoFromTextarea(sectionId: string, canvasSelector: string) {
+function runDemoFromTextarea(sectionId: string, canvasSelector: string, forceRemount = false) {
   const section = document.getElementById(sectionId);
   if (!section) return;
   show(sectionId);
@@ -58,10 +58,14 @@ function runDemoFromTextarea(sectionId: string, canvasSelector: string) {
   if (!textarea) return;
   const card = section.querySelector(`.demo-code[data-target="${canvasSelector}"]`);
   const existing = demoMountState.get(canvasSelector);
-  if (existing) {
+  if (existing && !forceRemount) {
     existing.render();
     updateDemoLoss(card, null);
     return;
+  }
+  if (existing && forceRemount) {
+    existing.destroy();
+    demoMountState.delete(canvasSelector);
   }
   const fn = new Function("G9", "point", "line", "np", "jit", "vmap", textarea.value);
   const g9 = fn(G9, point, line, np, jit, vmap);
@@ -82,7 +86,7 @@ function runDemoFromCard(card: Element): void {
   const sectionId = section?.id ?? "";
   const canvasSelector = card instanceof HTMLElement ? card.dataset.target ?? "" : "";
   if (!sectionId || !canvasSelector) return;
-  runDemoFromTextarea(sectionId, canvasSelector);
+  runDemoFromTextarea(sectionId, canvasSelector, true);
 }
 
 function bindRunButtons(): void {
