@@ -334,17 +334,18 @@ const OFFSETS = np.array(
   {dtype: np.float32},
 );
 
-const ringPt = (offset, angle, radius, scale) => {
-  const a = angle.add(offset);
+const ringPt = (offset, angle, radius, scale, dir) => {
+  const a = angle.add(offset.mul(dir.ref));
   const r = radius.ref.mul(scale.ref);
   return np.concatenate([np.cos(a.ref).mul(r.ref), np.sin(a).mul(r)]);
 };
-const vmapRing = vmap(ringPt, [0, null, null, null]);
+const vmapRing = vmap(ringPt, [0, null, null, null, null]);
 
 return new G9((params) => {
   const rings = Array.from({length: LEVELS}, (_, level) => {
     const scale = LEVEL_SCALE.ref.slice([level, level + 1]);
-    return vmapRing(OFFSETS.ref, params.angle.ref, params.radius.ref, scale).reshape([PER_LEVEL * 2]);
+    const direction = np.array([level % 2 === 0 ? 1 : -1], {dtype: np.float32});
+    return vmapRing(OFFSETS.ref, params.angle.ref, params.radius.ref, scale, direction).reshape([PER_LEVEL * 2]);
   });
 
   const pts = {};

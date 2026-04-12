@@ -335,6 +335,7 @@ run("rings example render path works exactly as in main.ts", () => {
   const OFFSET_VALUES = Array.from({ length: TOTAL }, (_unused, i) => (i / PER_LEVEL) * Math.PI * 2);
   const LEVEL_IDS = Array.from({ length: TOTAL }, (_unused, i) => Math.floor(i / PER_LEVEL));
   const BASE_RADII = [1.0, 0.84, 0.68, 0.52, 0.36];
+  const DIR = [1, -1, 1, -1, 1];
 
   const radius = np.array([120], { dtype: np.float32 });
   const angle = np.array([0], { dtype: np.float32 });
@@ -342,7 +343,8 @@ run("rings example render path works exactly as in main.ts", () => {
     const pts: Record<string, any> = {};
     for (let i = 0; i < TOTAL; i++) {
       const offset = np.array([OFFSET_VALUES[i]], { dtype: np.float32 });
-      const a = params.angle.ref.add(offset);
+      const dir = np.array([DIR[LEVEL_IDS[i]]], { dtype: np.float32 });
+      const a = params.angle.ref.mul(dir.ref).add(offset);
       const baseScale = np.array([BASE_RADII[LEVEL_IDS[i]]], { dtype: np.float32 });
       const levelRadius = params.radius.ref.mul(baseScale.ref);
       const px = np.cos(a.ref).mul(levelRadius.ref);
@@ -361,10 +363,14 @@ run("rings example render path works exactly as in main.ts", () => {
     return pts;
   };
 
-  const shapes = render({ radius: radius.ref, angle: angle.ref });
+  const shapes = render({ radius, angle });
   assert(Object.keys(shapes).length === TOTAL, `rings example should render ${TOTAL} points`);
-  assert(toList(shapes.p0.c).length === 2, "rings point should be 2D");
-  assert(toList(shapes.p99.c).length === 2, "rings final point should be 2D");
+  const level0 = toList(shapes.p0.c);
+  const level99 = toList(shapes.p99.c);
+  const level1 = toList(shapes.p20.c);
+  assert(level0.length === 2, "rings point should be 2D");
+  assert(level99.length === 2, "rings final point should be 2D");
+  assert(Math.sign(level0[1]) !== Math.sign(level1[1]), "adjacent levels should rotate in opposite directions");
 });
 
 run("line drag loss minimizes", () => {
