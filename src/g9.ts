@@ -1,4 +1,4 @@
-import { numpy as jaxNp, jit, grad, jacfwd, vmap } from "@jax-js/jax";
+import { numpy as jaxNp, jit, grad, vmap } from "@jax-js/jax";
 
 function isTracerLike(value: any): boolean {
   return !!value
@@ -24,12 +24,6 @@ function concatWithGradCompat(values: any[]): any {
     return value;
   });
   return jaxNp.concatenate(lifted);
-}
-
-function isReverseModeUnsupported(error: any): boolean {
-  if (error?.name === "NonlinearError") return true;
-  const message = String(error?.message ?? error);
-  return message.includes("Nonlinear operation in backward pass");
 }
 
 const np: typeof jaxNp = new Proxy(jaxNp as any, {
@@ -375,8 +369,6 @@ function buildAffectsMask(
 type CachedJit = {
   jitLoss: any;
   jitGrad: any;
-  jitGradFallback: any;
-  useGradFallback: boolean;
   jitRender: any;
   jitBatchLoss: any;
   renderIds: string[];
@@ -419,8 +411,6 @@ export function minimize(
     return {
       jitLoss: null,
       jitGrad: null,
-      jitGradFallback: null,
-      useGradFallback: false,
       jitRender: null,
       jitBatchLoss: null,
       renderIds: [],
@@ -486,15 +476,12 @@ export function minimize(
     ? cached.bfgsHy
     : new Float64Array(dim);
 
-  let jitLoss: any, jitGrad: any, jitGradFallback: any, jitRender: any, jitBatchLoss: any;
-  let useGradFallback = cached?.useGradFallback ?? false;
+  let jitLoss: any, jitGrad: any, jitRender: any, jitBatchLoss: any;
   let renderIds: string[] = cached?.renderIds ?? [];
   if (cached && cached.targetLen === tLen) {
     runtimeStats.jitCacheHits += 1;
     jitLoss = cached.jitLoss;
     jitGrad = cached.jitGrad;
-    jitGradFallback = cached.jitGradFallback ?? cached.jitGrad;
-    useGradFallback = cached.useGradFallback ?? false;
     jitRender = cached.jitRender;
     jitBatchLoss = cached.jitBatchLoss;
   } else {
@@ -532,8 +519,6 @@ export function minimize(
     };
     jitLoss = jit(combinedFn);
     jitGrad = jit(grad(combinedFn));
-    jitGradFallback = jit(jacfwd(combinedFn));
-    useGradFallback = false;
     jitRender = jit(renderOnlyFn);
     jitBatchLoss = jit(vmap(combinedFn, [0]));
     runtimeStats.jitBuilds += 1;
@@ -545,8 +530,6 @@ export function minimize(
     return {
       jitLoss,
       jitGrad,
-      jitGradFallback,
-      useGradFallback,
       jitRender,
       jitBatchLoss,
       renderIds,
@@ -597,14 +580,7 @@ export function minimize(
     iterationsUsed = it + 1;
     for (let i = 0; i < dim; i++) combinedBuffer[tLen + i] = x[i];
     const combined = np.array(combinedBuffer, { dtype: np.float32 });
-    let fullG: number[];
-    try {
-      fullG = toJSArr((useGradFallback ? jitGradFallback : jitGrad)(combined));
-    } catch (error) {
-      if (useGradFallback || !isReverseModeUnsupported(error)) throw error;
-      useGradFallback = true;
-      fullG = toJSArr(jitGradFallback(combined));
-    }
+    const fullG = toJSArr(jitGrad(combined));
     if (affectsMask) {
       for (let i = 0; i < dim; i++) gBuffer[i] = fullG[tLen + i] * affectsMask[i];
     } else {
@@ -706,14 +682,7 @@ export function minimize(
 
       for (let i = 0; i < dim; i++) combinedBuffer[tLen + i] = x[i];
       const nextCombined = np.array(combinedBuffer, { dtype: np.float32 });
-      let nextGradFull: number[];
-      try {
-        nextGradFull = toJSArr((useGradFallback ? jitGradFallback : jitGrad)(nextCombined));
-      } catch (error) {
-        if (useGradFallback || !isReverseModeUnsupported(error)) throw error;
-        useGradFallback = true;
-        nextGradFull = toJSArr(jitGradFallback(nextCombined));
-      }
+      const nextGradFull = toJSArr(jitGrad(nextCombined));
       if (affectsMask) {
         for (let i = 0; i < dim; i++) bfgsGradNext[i] = nextGradFull[tLen + i] * affectsMask[i];
       } else {
@@ -781,8 +750,6 @@ export function minimize(
   return {
     jitLoss,
     jitGrad,
-    jitGradFallback,
-    useGradFallback,
     jitRender,
     jitBatchLoss,
     renderIds,
@@ -1271,8 +1238,6 @@ export class G9 {
     };
     const jitLoss = jit(combinedFn);
     const jitGrad = jit(grad(combinedFn));
-    const jitGradFallback = jit(jacfwd(combinedFn));
-    let useGradFallback = false;
     const jitRender = jit(renderOnlyFn);
     const jitBatchLoss = jit(vmap(combinedFn, [0]));
     runtimeStats.warmupBuilds += 1;
@@ -1282,13 +1247,7 @@ export class G9 {
     for (let i = 0; i < tLen; i++) warmupCombined[i] = target[i] ?? 0;
     for (let i = 0; i < dim; i++) warmupCombined[tLen + i] = x[i];
     jitLoss(np.array(warmupCombined, { dtype: np.float32 }));
-    try {
-      jitGrad(np.array(warmupCombined, { dtype: np.float32 }));
-    } catch (error) {
-      if (!isReverseModeUnsupported(error)) throw error;
-      useGradFallback = true;
-      jitGradFallback(np.array(warmupCombined, { dtype: np.float32 }));
-    }
+    jitGrad(np.array(warmupCombined, { dtype: np.float32 }));
     const warmupBatch = new Float32Array(totalLen * LINE_SEARCH_TRIALS);
     for (let ls = 0; ls < LINE_SEARCH_TRIALS; ls++) {
       const row = ls * totalLen;
@@ -1298,8 +1257,6 @@ export class G9 {
     return {
       jitLoss,
       jitGrad,
-      jitGradFallback,
-      useGradFallback,
       jitRender,
       jitBatchLoss,
       renderIds,
