@@ -297,6 +297,10 @@ run("line-search converges better with more iterations on hard rings path", () =
   }
 });
 
+run("debug mode defaults to enabled", () => {
+  assert(getG9DragDebugEnabled(), "debug mode should default to enabled");
+});
+
 run("debug mode tracks average optimization loss", () => {
   const prevDebug = getG9DragDebugEnabled();
   setG9DragDebugEnabled(true);
@@ -620,6 +624,50 @@ run("constrained line responds to horizontal drag in one move event", () => {
 
   const line2 = toList((g9 as any).params[0].value);
   assert(line2[0] > 20, `x1 should move right after single horizontal drag event, got ${line2[0]}`);
+});
+
+run("line drag debug markers are visible during drag and hidden on release", () => {
+  const prevDebug = getG9DragDebugEnabled();
+  setG9DragDebugEnabled(true);
+  try {
+    const { host, dispatchDocumentEvent } = installInteractiveFakeDom();
+    const g9 = new G9(
+      (params: Record<string, any>) => ({
+        l2: line(params.line2, { affects: { line2: [1, 1, 0, 0] } }),
+      }),
+      {
+        line2: [-100, 0, 100, 0],
+      },
+    );
+    g9.align("center", "center").insertInto(host as any);
+
+    const lineEl = ((g9 as any).elements.l2 as any).el as FakeElement;
+    const eventAt = (clientX: number, clientY: number) => ({
+      clientX,
+      clientY,
+      cancelable: true,
+      stopPropagation: () => {},
+      preventDefault: () => {},
+    });
+
+    lineEl.dispatch("mousedown", eventAt(400, 300));
+    const pullMarker = (g9 as any)._debugPullEl as FakeElement | null;
+    const targetMarker = (g9 as any)._debugTargetEl as FakeElement | null;
+    assert(!!pullMarker && !!targetMarker, "expected debug markers to be created");
+    assert(
+      pullMarker.style.display !== "none" && targetMarker.style.display !== "none",
+      "expected debug markers to be visible while dragging",
+    );
+
+    dispatchDocumentEvent("mousemove", eventAt(460, 300));
+    dispatchDocumentEvent("mouseup", eventAt(460, 300));
+    assert(
+      pullMarker.style.display === "none" && targetMarker.style.display === "none",
+      "expected debug markers to hide after drag end",
+    );
+  } finally {
+    setG9DragDebugEnabled(prevDebug);
+  }
 });
 
 run("line drag end does not snap back to drag start", () => {
