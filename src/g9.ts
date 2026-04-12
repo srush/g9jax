@@ -333,6 +333,18 @@ function readVec(params: ParamState[]): number[] {
   return vals;
 }
 
+function stripAffectOptions(
+  affects: Record<string, any> | null | undefined,
+): Record<string, any> | null | undefined {
+  if (!affects || typeof affects !== "object" || Array.isArray(affects)) return affects;
+  const hasOptKey = Object.prototype.hasOwnProperty.call(affects, "opt");
+  const hasLegacyDragIterKey = Object.prototype.hasOwnProperty.call(affects, "dragIter");
+  const affectEntries = Object.entries(affects).filter(([key]) => key !== "opt" && key !== "dragIter");
+  if (affectEntries.length > 0) return Object.fromEntries(affectEntries);
+  if (hasOptKey || hasLegacyDragIterKey) return null;
+  return affects;
+}
+
 
 function writeVec(params: ParamState[], sizes: number[], x: number[]): void {
   let off = 0;
@@ -348,7 +360,8 @@ function buildAffectsMask(
   sizes: number[],
   affects: Record<string, any> | null | undefined,
 ): Float64Array | null {
-  if (!affects) return null;
+  const gradAffects = stripAffectOptions(affects);
+  if (!gradAffects) return null;
   const total = sizes.reduce((a, b) => a + b, 0);
   const mask = new Float64Array(total).fill(1);
   let hasRestrictions = false;
@@ -356,11 +369,11 @@ function buildAffectsMask(
   for (let pi = 0; pi < params.length; pi++) {
     const n = sizes[pi];
     for (let j = 0; j < n; j++) {
-      if (!(params[pi].name in affects)) {
+      if (!(params[pi].name in gradAffects)) {
         mask[idx] = 0;
         hasRestrictions = true;
       } else {
-        const a = affects[params[pi].name];
+        const a = gradAffects[params[pi].name];
         if (a !== true) {
           const av = Array.isArray(a) ? a : toJSArr(a);
           if (av[j] === 0) {
@@ -1323,9 +1336,8 @@ export class G9 {
     const affectsObj: AffectsConfig = (affects && typeof affects === "object" && !Array.isArray(affects))
       ? affects as AffectsConfig
       : {};
-    const hasOptKey = Object.prototype.hasOwnProperty.call(affectsObj, "opt");
     const hasLegacyDragIterKey = Object.prototype.hasOwnProperty.call(affectsObj, "dragIter");
-    const optObj = hasOptKey && affectsObj.opt && typeof affectsObj.opt === "object"
+    const optObj = affectsObj.opt && typeof affectsObj.opt === "object"
       ? affectsObj.opt
       : null;
     const dragIterRaw = optObj && Object.prototype.hasOwnProperty.call(optObj, "dragIter")
@@ -1336,10 +1348,7 @@ export class G9 {
       : Array.isArray(dragIterRaw)
         ? Number(dragIterRaw[0])
         : Number(dragIterRaw);
-    const affectEntries = Object.entries(affectsObj).filter(([key]) => key !== "opt" && key !== "dragIter");
-    const affectsForGrad: Record<string, any> | null | undefined = affectEntries.length > 0
-      ? Object.fromEntries(affectEntries)
-      : (hasOptKey || hasLegacyDragIterKey ? null : affects);
+    const affectsForGrad = stripAffectOptions(affects);
     const maxIterCap = Number.isFinite(dragIterOverride)
       ? Math.max(0, Math.floor(dragIterOverride))
       : lineSearchEnabled
