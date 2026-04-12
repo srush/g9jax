@@ -47,6 +47,17 @@ type RenderFn = (
   params: Record<string, any>,
 ) => RenderOutput;
 
+type AffectOptions = {
+  dragIter?: number | number[];
+  regWeight?: number | number[];
+};
+
+type AffectsConfig = Record<string, any> & {
+  opt?: AffectOptions;
+  dragIter?: number | number[]; // legacy support
+  regWeight?: number | number[]; // legacy support
+};
+
 type RuntimeStats = {
   minimizeCalls: number;
   jitBuilds: number;
@@ -96,8 +107,9 @@ export function line(
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const MOBILE_POINT_RADIUS_SCALE = 1.35;
-const DRAG_ITER_ADAPTIVE = 10;
-const DRAG_ITER_LINE_SEARCH = 5;
+const DRAG_ITER_ADAPTIVE = 14;
+const DRAG_ITER_LINE_SEARCH = 10;
+const DRAG_START_REG_WEIGHT = 1e-3;
 const LINE_SEARCH_TRIALS = 12;
 const DRAG_RENDER_EVERY = 2;
 let activeDragCount = 0;
@@ -324,6 +336,18 @@ function readVec(params: ParamState[]): number[] {
   return vals;
 }
 
+function stripAffectOptions(
+  affects: Record<string, any> | null | undefined,
+): Record<string, any> | null | undefined {
+  if (!affects || typeof affects !== "object" || Array.isArray(affects)) return affects;
+  const hasOptKey = Object.prototype.hasOwnProperty.call(affects, "opt");
+  const hasLegacyDragIterKey = Object.prototype.hasOwnProperty.call(affects, "dragIter");
+  const affectEntries = Object.entries(affects).filter(([key]) => key !== "opt" && key !== "dragIter");
+  if (affectEntries.length > 0) return Object.fromEntries(affectEntries);
+  if (hasOptKey || hasLegacyDragIterKey) return null;
+  return affects;
+}
+
 
 function writeVec(params: ParamState[], sizes: number[], x: number[]): void {
   let off = 0;
@@ -339,7 +363,8 @@ function buildAffectsMask(
   sizes: number[],
   affects: Record<string, any> | null | undefined,
 ): Float64Array | null {
-  if (!affects) return null;
+  const gradAffects = stripAffectOptions(affects);
+  if (!gradAffects) return null;
   const total = sizes.reduce((a, b) => a + b, 0);
   const mask = new Float64Array(total).fill(1);
   let hasRestrictions = false;
@@ -347,11 +372,11 @@ function buildAffectsMask(
   for (let pi = 0; pi < params.length; pi++) {
     const n = sizes[pi];
     for (let j = 0; j < n; j++) {
-      if (!(params[pi].name in affects)) {
+      if (!(params[pi].name in gradAffects)) {
         mask[idx] = 0;
         hasRestrictions = true;
       } else {
-        const a = affects[params[pi].name];
+        const a = gradAffects[params[pi].name];
         if (a !== true) {
           const av = Array.isArray(a) ? a : toJSArr(a);
           if (av[j] === 0) {
@@ -391,7 +416,23 @@ type CachedJit = {
   bfgsGradNext: Float64Array;
   bfgsY: Float64Array;
   bfgsHy: Float64Array;
+  dragStartX: Float64Array | null;
 };
+
+type MinimizeRegularizer = {
+  anchor: ArrayLike<number> | null;
+  weight: number;
+};
+
+function parseOptNumber(
+  optValue: number | number[] | undefined,
+  legacyValue: number | number[] | undefined,
+): number {
+  const source = optValue ?? legacyValue;
+  if (source == null) return NaN;
+  const value = Array.isArray(source) ? Number(source[0]) : Number(source);
+  return Number.isFinite(value) ? value : NaN;
+}
 
 export function minimize(
   params: ParamState[],
@@ -401,6 +442,7 @@ export function minimize(
   affects: Record<string, any> | null | undefined,
   maxIter = 30,
   cached?: CachedJit,
+  regularizer?: MinimizeRegularizer,
 ): CachedJit {
   runtimeStats.minimizeCalls += 1;
   const sizes = params.map((p) => p.value.shape[0]);
@@ -433,6 +475,7 @@ export function minimize(
       bfgsGradNext: null,
       bfgsY: null,
       bfgsHy: null,
+      dragStartX: null,
     };
   }
 
@@ -552,6 +595,7 @@ export function minimize(
       bfgsGradNext,
       bfgsY,
       bfgsHy,
+      dragStartX: cached?.dragStartX ?? null,
     };
   }
 
@@ -559,6 +603,21 @@ export function minimize(
     ? cached.affectsMask
     : buildAffectsMask(params, sizes, affects);
   let x = readVec(params);
+  const regularizerWeight = Number.isFinite(regularizer?.weight)
+    ? Math.max(0, Number(regularizer?.weight))
+    : 0;
+  const regularizerAnchor = regularizer?.anchor && regularizer.anchor.length === dim
+    ? regularizer.anchor
+    : null;
+  const regularizeLoss = (vector: number[]): number => {
+    if (!regularizerAnchor || regularizerWeight <= 0) return 0;
+    let total = 0;
+    for (let i = 0; i < dim; i++) {
+      const delta = vector[i] - Number(regularizerAnchor[i]);
+      total += delta * delta;
+    }
+    return regularizerWeight * total;
+  };
   for (let i = 0; i < tLen; i++) {
     const tv = target[i];
     combinedBuffer[i] = tv;
@@ -581,10 +640,12 @@ export function minimize(
     for (let i = 0; i < dim; i++) combinedBuffer[tLen + i] = x[i];
     const combined = np.array(combinedBuffer, { dtype: np.float32 });
     const fullG = toJSArr(jitGrad(combined));
-    if (affectsMask) {
-      for (let i = 0; i < dim; i++) gBuffer[i] = fullG[tLen + i] * affectsMask[i];
-    } else {
-      for (let i = 0; i < dim; i++) gBuffer[i] = fullG[tLen + i];
+    for (let i = 0; i < dim; i++) {
+      const regGrad = regularizerAnchor && regularizerWeight > 0
+        ? 2 * regularizerWeight * (x[i] - Number(regularizerAnchor[i]))
+        : 0;
+      const grad = fullG[tLen + i] + regGrad;
+      gBuffer[i] = affectsMask ? grad * affectsMask[i] : grad;
     }
 
     let gnorm2 = 0;
@@ -599,7 +660,7 @@ export function minimize(
 
     if (lineSearchEnabled) {
       for (let i = 0; i < dim; i++) x0Buffer[i] = x[i];
-      const f0 = evalLoss(jitLoss, tLen, x, combinedBuffer);
+      const f0 = evalLoss(jitLoss, tLen, x, combinedBuffer) + regularizeLoss(x);
       let descentDot = 0;
       let stepNorm2 = 0;
       const maxBfgsCoordStep = 18.0;
@@ -662,8 +723,18 @@ export function minimize(
       );
       let accepted = false;
       let acceptedAlpha = alpha;
+      const regularizeTrialLoss = (trialAlpha: number): number => {
+        if (!regularizerAnchor || regularizerWeight <= 0) return 0;
+        let total = 0;
+        for (let i = 0; i < dim; i++) {
+          const trialValue = x0Buffer[i] + trialAlpha * bfgsStep[i];
+          const delta = trialValue - Number(regularizerAnchor[i]);
+          total += delta * delta;
+        }
+        return regularizerWeight * total;
+      };
       for (let ls = 0; ls < LINE_SEARCH_TRIALS; ls++) {
-        const fTrial = batchedTrialLosses[ls];
+        const fTrial = batchedTrialLosses[ls] + regularizeTrialLoss(acceptedAlpha);
         if (Number.isFinite(fTrial) && fTrial <= f0 + 1e-4 * acceptedAlpha * descentDot) {
           for (let i = 0; i < dim; i++) x[i] = x0Buffer[i] + acceptedAlpha * bfgsStep[i];
           accepted = true;
@@ -683,10 +754,12 @@ export function minimize(
       for (let i = 0; i < dim; i++) combinedBuffer[tLen + i] = x[i];
       const nextCombined = np.array(combinedBuffer, { dtype: np.float32 });
       const nextGradFull = toJSArr(jitGrad(nextCombined));
-      if (affectsMask) {
-        for (let i = 0; i < dim; i++) bfgsGradNext[i] = nextGradFull[tLen + i] * affectsMask[i];
-      } else {
-        for (let i = 0; i < dim; i++) bfgsGradNext[i] = nextGradFull[tLen + i];
+      for (let i = 0; i < dim; i++) {
+        const regGrad = regularizerAnchor && regularizerWeight > 0
+          ? 2 * regularizerWeight * (x[i] - Number(regularizerAnchor[i]))
+          : 0;
+        const grad = nextGradFull[tLen + i] + regGrad;
+        bfgsGradNext[i] = affectsMask ? grad * affectsMask[i] : grad;
       }
 
       let ys = 0;
@@ -739,7 +812,7 @@ export function minimize(
   }
 
   const hitLimit = maxIter > 0 && !converged && iterationsUsed >= maxIter;
-  const loss = evalLoss(jitLoss, tLen, x, combinedBuffer);
+  const loss = evalLoss(jitLoss, tLen, x, combinedBuffer) + regularizeLoss(x);
   if (dragDebugEnabled && Number.isFinite(loss)) {
     debugLossStats.sum += loss;
     debugLossStats.count += 1;
@@ -772,6 +845,7 @@ export function minimize(
     bfgsGradNext,
     bfgsY,
     bfgsHy,
+    dragStartX: cached?.dragStartX ?? null,
   };
 }
 
@@ -900,10 +974,18 @@ class LineEl {
     addDrag(this.el, (evt) => {
       this._cached.lastConverged = false;
       this._cached.lastHitLimit = false;
-      const affectsRaw = this.args.affects;
-      const dragAffects = affectsRaw && typeof affectsRaw === "object" && !Array.isArray(affectsRaw)
-        ? ("dragIter" in affectsRaw ? affectsRaw : { ...affectsRaw, dragIter: [24] })
-        : { dragIter: [24] };
+      const affectsRaw = this.args.affects as AffectsConfig | undefined;
+      const dragAffects: AffectsConfig = affectsRaw && typeof affectsRaw === "object" && !Array.isArray(affectsRaw)
+        ? {
+          ...affectsRaw,
+          opt: {
+            ...(affectsRaw.opt && typeof affectsRaw.opt === "object" ? affectsRaw.opt : {}),
+            dragIter: (affectsRaw.opt && typeof affectsRaw.opt === "object" && "dragIter" in affectsRaw.opt)
+              ? affectsRaw.opt.dragIter
+              : ("dragIter" in affectsRaw ? affectsRaw.dragIter : [24]),
+          },
+        }
+        : { opt: { dragIter: [24] } };
       const c = this._cachedCoords.slice();
       const off = g9.getOffset();
       const cx = evt.clientX - off.left;
@@ -1292,6 +1374,7 @@ export class G9 {
       bfgsGradNext: new Float64Array(dim),
       bfgsY: new Float64Array(dim),
       bfgsHy: new Float64Array(dim),
+      dragStartX: null,
     };
   }
 
@@ -1303,13 +1386,31 @@ export class G9 {
     forceRender = false,
     cached?: CachedJit,
   ): CachedJit {
-    const affectsObj = affects ?? {};
-    const dragIterRaw = "dragIter" in affectsObj ? (affectsObj as any).dragIter : null;
+    const affectsObj: AffectsConfig = (affects && typeof affects === "object" && !Array.isArray(affects))
+      ? affects as AffectsConfig
+      : {};
+    const hasLegacyDragIterKey = Object.prototype.hasOwnProperty.call(affectsObj, "dragIter");
+    const hasLegacyRegWeightKey = Object.prototype.hasOwnProperty.call(affectsObj, "regWeight");
+    const optObj = affectsObj.opt && typeof affectsObj.opt === "object"
+      ? affectsObj.opt
+      : null;
+    const dragIterRaw = optObj && Object.prototype.hasOwnProperty.call(optObj, "dragIter")
+      ? optObj.dragIter
+      : (hasLegacyDragIterKey ? affectsObj.dragIter : null);
     const dragIterOverride = dragIterRaw == null
       ? NaN
       : Array.isArray(dragIterRaw)
         ? Number(dragIterRaw[0])
         : Number(dragIterRaw);
+    const regWeightRaw = optObj && Object.prototype.hasOwnProperty.call(optObj, "regWeight")
+      ? optObj.regWeight
+      : (hasLegacyRegWeightKey ? affectsObj.regWeight : null);
+    const regWeightOverride = regWeightRaw == null
+      ? NaN
+      : Array.isArray(regWeightRaw)
+        ? Number(regWeightRaw[0])
+        : Number(regWeightRaw);
+    const affectsForGrad = stripAffectOptions(affects);
     const maxIterCap = Number.isFinite(dragIterOverride)
       ? Math.max(0, Math.floor(dragIterOverride))
       : lineSearchEnabled
@@ -1320,7 +1421,17 @@ export class G9 {
     });
     const shouldRun = !cached || targetChanged || (!cached.lastConverged && !cached.lastHitLimit);
     const dragIterations = shouldRun ? maxIterCap : 0;
-    const c = minimize(this.params, this.renderFn, lossFn, target, affects, dragIterations, cached);
+    const effectiveRegWeight = Number.isFinite(regWeightOverride)
+      ? Math.max(0, regWeightOverride)
+      : DRAG_START_REG_WEIGHT;
+    const dragStartX = cached?.dragStartX && cached.dragStartX.length === this.params.reduce((a, p) => a + p.value.shape[0], 0)
+      ? cached.dragStartX
+      : new Float64Array(readVec(this.params));
+    const regularizer = {
+      anchor: dragStartX,
+      weight: effectiveRegWeight,
+    };
+    const c = minimize(this.params, this.renderFn, lossFn, target, affectsForGrad, dragIterations, cached, regularizer);
     emitOptimizeLoss(this.containerId, c.lastLoss);
     this._dragRenderCounter += 1;
     // Always render when the drag target moves so a single moved frame cannot get skipped.
@@ -1329,6 +1440,7 @@ export class G9 {
       this._renderFast(c);
       this._dragRenderCounter = 0;
     }
+    c.dragStartX = dragStartX;
     return c;
   }
 
