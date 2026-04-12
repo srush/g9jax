@@ -756,28 +756,32 @@ run("getOffset tracks live parent rect after mount", () => {
   assert(Math.abs(shifted.left - 430) < 1e-6, `expected shifted left=430, got ${shifted.left}`);
 });
 
-run("affects opt controls iterations without masking params", () => {
-  const renderFn = (p: any) => ({ p: point(p.xy) });
+run("shape opt controls iterations without masking params", () => {
+  const host = installFakeDom();
+  const g9 = new G9(
+    (params: Record<string, any>) => ({ p: point(params.xy, { affects: { xy: true }, opt: { dragIter: [6] } }) }),
+    { xy: [0, 0] },
+  );
+  g9.align("center", "center").insertInto(host as any);
+
   const lossFn = (target: any, coords: any) => {
     const d = coords.p.sub(target);
     return d.ref.mul(d).sum();
   };
-
-  const withOptOnly: ParamState[] = [
-    { name: "xy", value: np.array([0, 0], { dtype: np.float32 }) },
-  ];
-  minimize(withOptOnly, renderFn, lossFn, [30, -12], { opt: { dragIter: [6] } }, 6);
-  const moved = toList(withOptOnly[0].value);
+  (g9 as any)._minimize("p", lossFn, [30, -12], { xy: true }, true, undefined, { dragIter: [6] });
+  const moved = toList((g9 as any).params[0].value);
   assert(
     Math.hypot(moved[0], moved[1]) > 1,
-    `opt-only affects should allow movement, got [${moved.join(", ")}]`,
+    `separate opt should allow movement with affected dims, got [${moved.join(", ")}]`,
   );
 
-  const withEmptyAffects: ParamState[] = [
-    { name: "xy", value: np.array([0, 0], { dtype: np.float32 }) },
-  ];
-  minimize(withEmptyAffects, renderFn, lossFn, [30, -12], {}, 6);
-  const stayed = toList(withEmptyAffects[0].value);
+  const g9Masked = new G9(
+    (params: Record<string, any>) => ({ p: point(params.xy, { affects: { xy: true }, opt: { dragIter: [6] } }) }),
+    { xy: [0, 0] },
+  );
+  g9Masked.align("center", "center").insertInto(host as any);
+  (g9Masked as any)._minimize("p", lossFn, [30, -12], {}, true, undefined, { dragIter: [6] });
+  const stayed = toList((g9Masked as any).params[0].value);
   assert(
     Math.hypot(stayed[0], stayed[1]) < 1e-6,
     `empty affects should still mask params, got [${stayed.join(", ")}]`,
@@ -1044,7 +1048,7 @@ run("dragon line drag converges better with higher dragIter", () => {
     const ROT = np.array([[0, 1], [-1, 0]], { dtype: np.float32 });
     const g9 = new G9((params: Record<string, any>) => {
       const pts: Record<string, any> = {};
-      const lineOpts = { affects: { squareness: true, opt: { dragIter: [dragIter], regWeight: [0] } } };
+      const lineOpts = { affects: { squareness: true }, opt: { dragIter: [dragIter], regWeight: [0] } };
       function dragon(fromPt: any, toPt: any, dir: number, level: number, name: string): void {
         if (level === 0) {
           pts[`ln${name}`] = line(np.concatenate([fromPt, toPt]), lineOpts);
@@ -1145,8 +1149,9 @@ run("drag regularizer limits parameter displacement from drag start", () => {
       const d = coords.p.sub(target);
       return d.ref.mul(d).sum();
     };
-    const affects = { xy: true, opt: { dragIter: [10], regWeight: [regWeight] } };
-    (g9 as any)._minimize("p", lossFn, [260, -210], affects, true, undefined);
+    const affects = { xy: true };
+    const opt = { dragIter: [10], regWeight: [regWeight] };
+    (g9 as any)._minimize("p", lossFn, [260, -210], affects, true, undefined, opt);
     const xy = toList((g9 as any).params[0].value);
     return Math.hypot(xy[0], xy[1]);
   };
@@ -1656,8 +1661,9 @@ run("tongs demo runs offline and supports repeated minimization", () => {
       for (let i = 0; i < 4; i++) {
         const dir = i % 2 === 0 ? -1 : 1;
         const localAffects = i < 3
-          ? { b: true, opt: { dragIter: [1] } }
-          : { a: true, opt: { dragIter: [1] } };
+          ? { b: true }
+          : { a: true };
+        const localOpt = { dragIter: [1] };
         const nx = x.ref.add(np.cos(params.b.ref).mul(SEGMENT));
         const nyTop = yTop.ref.add(np.sin(params.b.ref).mul(SEGMENT * dir));
         const nyBottom = yBottom.ref.sub(np.sin(params.b.ref).mul(SEGMENT * dir));
@@ -1672,15 +1678,17 @@ run("tongs demo runs offline and supports repeated minimization", () => {
           "stroke-width": 8,
           "stroke-linecap": "round",
           affects: localAffects,
+          opt: localOpt,
         });
         pts[`l${i}`] = line(np.concatenate([b0.ref, b1.ref]), {
           stroke: "#111827",
           "stroke-width": 8,
           "stroke-linecap": "round",
           affects: localAffects,
+          opt: localOpt,
         });
-        pts[`up${i}`] = point(a1.ref, { fill: "#0ea5e9", r: 4, affects: localAffects });
-        pts[`lp${i}`] = point(b1.ref, { fill: "#0ea5e9", r: 4, affects: localAffects });
+        pts[`up${i}`] = point(a1.ref, { fill: "#0ea5e9", r: 4, affects: localAffects, opt: localOpt });
+        pts[`lp${i}`] = point(b1.ref, { fill: "#0ea5e9", r: 4, affects: localAffects, opt: localOpt });
 
         x = nx;
         yTop = nyTop;
@@ -1729,8 +1737,9 @@ run("tongs tiny line drag does not overshoot parameters", () => {
     for (let i = 0; i < 4; i++) {
       const dir = i % 2 === 0 ? -1 : 1;
       const localAffects = i < 3
-        ? { b: true, opt: { dragIter: [1] } }
-        : { a: true, opt: { dragIter: [1] } };
+        ? { b: true }
+        : { a: true };
+      const localOpt = { dragIter: [1] };
       const nx = x.ref.add(np.cos(params.b.ref).mul(SEGMENT));
       const nyTop = yTop.ref.add(np.sin(params.b.ref).mul(SEGMENT * dir));
       const nyBottom = yBottom.ref.sub(np.sin(params.b.ref).mul(SEGMENT * dir));
@@ -1738,10 +1747,10 @@ run("tongs tiny line drag does not overshoot parameters", () => {
       const a1 = rotate(np.concatenate([nx.ref, nyTop.ref]), params.a.ref);
       const b0 = rotate(np.concatenate([x.ref, yBottom.ref]), params.a.ref);
       const b1 = rotate(np.concatenate([nx.ref, nyBottom.ref]), params.a.ref);
-      pts[`u${i}`] = line(np.concatenate([a0.ref, a1.ref]), { affects: localAffects });
-      pts[`l${i}`] = line(np.concatenate([b0.ref, b1.ref]), { affects: localAffects });
-      pts[`up${i}`] = point(a1.ref, { affects: localAffects });
-      pts[`lp${i}`] = point(b1.ref, { affects: localAffects });
+      pts[`u${i}`] = line(np.concatenate([a0.ref, a1.ref]), { affects: localAffects, opt: localOpt });
+      pts[`l${i}`] = line(np.concatenate([b0.ref, b1.ref]), { affects: localAffects, opt: localOpt });
+      pts[`up${i}`] = point(a1.ref, { affects: localAffects, opt: localOpt });
+      pts[`lp${i}`] = point(b1.ref, { affects: localAffects, opt: localOpt });
       x = nx;
       yTop = nyTop;
       yBottom = nyBottom;
@@ -1777,7 +1786,7 @@ run("tongs tiny line drag does not overshoot parameters", () => {
     return d.ref.mul(d).sum();
   };
 
-  minimize(params, renderFn as any, lossFn as any, [cx - 1, cy, r], { b: true, opt: { dragIter: [1] } }, 1);
+  minimize(params, renderFn as any, lossFn as any, [cx - 1, cy, r], { b: true }, 1);
   const after = params.map((p) => toList(p.value)[0]);
   const deltaA = Math.abs(after[0] - before[0]);
   const deltaB = Math.abs(after[1] - before[1]);

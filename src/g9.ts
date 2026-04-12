@@ -34,7 +34,12 @@ const np: typeof jaxNp = new Proxy(jaxNp as any, {
   },
 }) as typeof jaxNp;
 
-type ShapeArgs = { type: "point" | "line"; c: any } & Record<string, any>;
+type ShapeOptions = {
+  dragIter?: number | number[];
+  regWeight?: number | number[];
+};
+
+type ShapeArgs = { type: "point" | "line"; c: any; opt?: ShapeOptions } & Record<string, any>;
 type RenderShapeMap = Record<string, ShapeArgs>;
 type SecondaryScores = Record<string, any>;
 type RenderOutput = RenderShapeMap | {
@@ -47,16 +52,7 @@ type RenderFn = (
   params: Record<string, any>,
 ) => RenderOutput;
 
-type AffectOptions = {
-  dragIter?: number | number[];
-  regWeight?: number | number[];
-};
-
-type AffectsConfig = Record<string, any> & {
-  opt?: AffectOptions;
-  dragIter?: number | number[]; // legacy support
-  regWeight?: number | number[]; // legacy support
-};
+type AffectsConfig = Record<string, any>;
 
 type RuntimeStats = {
   minimizeCalls: number;
@@ -340,11 +336,11 @@ function stripAffectOptions(
   affects: Record<string, any> | null | undefined,
 ): Record<string, any> | null | undefined {
   if (!affects || typeof affects !== "object" || Array.isArray(affects)) return affects;
-  const hasOptKey = Object.prototype.hasOwnProperty.call(affects, "opt");
   const hasLegacyDragIterKey = Object.prototype.hasOwnProperty.call(affects, "dragIter");
-  const affectEntries = Object.entries(affects).filter(([key]) => key !== "opt" && key !== "dragIter");
+  const hasLegacyRegWeightKey = Object.prototype.hasOwnProperty.call(affects, "regWeight");
+  const affectEntries = Object.entries(affects).filter(([key]) => key !== "dragIter" && key !== "regWeight");
   if (affectEntries.length > 0) return Object.fromEntries(affectEntries);
-  if (hasOptKey || hasLegacyDragIterKey) return null;
+  if (hasLegacyDragIterKey || hasLegacyRegWeightKey) return null;
   return affects;
 }
 
@@ -423,16 +419,6 @@ type MinimizeRegularizer = {
   anchor: ArrayLike<number> | null;
   weight: number;
 };
-
-function parseOptNumber(
-  optValue: number | number[] | undefined,
-  legacyValue: number | number[] | undefined,
-): number {
-  const source = optValue ?? legacyValue;
-  if (source == null) return NaN;
-  const value = Array.isArray(source) ? Number(source[0]) : Number(source);
-  return Number.isFinite(value) ? value : NaN;
-}
 
 export function minimize(
   params: ParamState[],
@@ -871,6 +857,7 @@ class PointEl {
       affects: Record<string, any> | null | undefined,
       forceRender: boolean,
       cached?: CachedJit,
+      opt?: ShapeOptions | null | undefined,
     ) => CachedJit,
     g9: G9,
   ): void {
@@ -896,13 +883,29 @@ class PointEl {
         drag: (dx, dy) => {
           const pullX = c0[0] + dx;
           const pullY = c0[1] + dy;
-          this._cached = doMinimize(id, lossFn, [pullX, pullY], this.args.affects, false, this._cached);
+          this._cached = doMinimize(
+            id,
+            lossFn,
+            [pullX, pullY],
+            this.args.affects,
+            false,
+            this._cached,
+            this.args.opt,
+          );
           const model = this._cachedCoords;
           this.g9.setDragDebug([pullX, pullY], [model[0], model[1]]);
         },
         end: () => {
           const c = this._cachedCoords;
-          this._cached = doMinimize(id, lossFn, [c[0], c[1]], this.args.affects, true, this._cached);
+          this._cached = doMinimize(
+            id,
+            lossFn,
+            [c[0], c[1]],
+            this.args.affects,
+            true,
+            this._cached,
+            this.args.opt,
+          );
           this.g9.clearDragDebug();
         },
       };
@@ -947,6 +950,7 @@ class LineEl {
       affects: Record<string, any> | null | undefined,
       forceRender: boolean,
       cached?: CachedJit,
+      opt?: ShapeOptions | null | undefined,
     ) => CachedJit,
     g9: G9,
   ): void {
@@ -975,17 +979,15 @@ class LineEl {
       this._cached.lastConverged = false;
       this._cached.lastHitLimit = false;
       const affectsRaw = this.args.affects as AffectsConfig | undefined;
-      const dragAffects: AffectsConfig = affectsRaw && typeof affectsRaw === "object" && !Array.isArray(affectsRaw)
-        ? {
-          ...affectsRaw,
-          opt: {
-            ...(affectsRaw.opt && typeof affectsRaw.opt === "object" ? affectsRaw.opt : {}),
-            dragIter: (affectsRaw.opt && typeof affectsRaw.opt === "object" && "dragIter" in affectsRaw.opt)
-              ? affectsRaw.opt.dragIter
-              : ("dragIter" in affectsRaw ? affectsRaw.dragIter : [24]),
-          },
-        }
-        : { opt: { dragIter: [24] } };
+      const optRaw = this.args.opt && typeof this.args.opt === "object"
+        ? this.args.opt as ShapeOptions
+        : {};
+      const dragOpt: ShapeOptions = {
+        ...optRaw,
+      };
+      if (dragOpt.dragIter == null) {
+        dragOpt.dragIter = [24];
+      }
       const c = this._cachedCoords.slice();
       const off = g9.getOffset();
       const cx = evt.clientX - off.left;
@@ -1001,7 +1003,7 @@ class LineEl {
         drag: (dx, dy) => {
           latestPullX = cx + dx;
           latestPullY = cy + dy;
-          this._cached = doMinimize(id, lossFn, [latestPullX, latestPullY, r], dragAffects, false, this._cached);
+          this._cached = doMinimize(id, lossFn, [latestPullX, latestPullY, r], affectsRaw, false, this._cached, dragOpt);
           const model = this._cachedCoords;
           const targetX = model[0] + (model[2] - model[0]) * r;
           const targetY = model[1] + (model[3] - model[1]) * r;
@@ -1012,7 +1014,7 @@ class LineEl {
           const ldx = c[2] - c[0], ldy = c[3] - c[1];
           const ll2 = ldx * ldx + ldy * ldy;
           const rr = ll2 > 0 ? ((latestPullX - c[0]) * ldx + (latestPullY - c[1]) * ldy) / ll2 : r;
-          this._cached = doMinimize(id, lossFn, [latestPullX, latestPullY, rr], dragAffects, true, this._cached);
+          this._cached = doMinimize(id, lossFn, [latestPullX, latestPullY, rr], affectsRaw, true, this._cached, dragOpt);
           this.g9.clearDragDebug();
         },
       };
@@ -1385,18 +1387,14 @@ export class G9 {
     affects: Record<string, any> | null | undefined,
     forceRender = false,
     cached?: CachedJit,
+    opt?: ShapeOptions | null | undefined,
   ): CachedJit {
-    const affectsObj: AffectsConfig = (affects && typeof affects === "object" && !Array.isArray(affects))
-      ? affects as AffectsConfig
-      : {};
-    const hasLegacyDragIterKey = Object.prototype.hasOwnProperty.call(affectsObj, "dragIter");
-    const hasLegacyRegWeightKey = Object.prototype.hasOwnProperty.call(affectsObj, "regWeight");
-    const optObj = affectsObj.opt && typeof affectsObj.opt === "object"
-      ? affectsObj.opt
+    const optObj = opt && typeof opt === "object"
+      ? opt
       : null;
     const dragIterRaw = optObj && Object.prototype.hasOwnProperty.call(optObj, "dragIter")
       ? optObj.dragIter
-      : (hasLegacyDragIterKey ? affectsObj.dragIter : null);
+      : null;
     const dragIterOverride = dragIterRaw == null
       ? NaN
       : Array.isArray(dragIterRaw)
@@ -1404,7 +1402,7 @@ export class G9 {
         : Number(dragIterRaw);
     const regWeightRaw = optObj && Object.prototype.hasOwnProperty.call(optObj, "regWeight")
       ? optObj.regWeight
-      : (hasLegacyRegWeightKey ? affectsObj.regWeight : null);
+      : null;
     const regWeightOverride = regWeightRaw == null
       ? NaN
       : Array.isArray(regWeightRaw)
