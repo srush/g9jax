@@ -385,43 +385,40 @@ const COUNT = GRID * GRID;
 const STEP = 28;
 const REPULSE_GAIN = np.array([3200], {dtype: np.float32});
 const REPULSE_SOFT = np.array([160], {dtype: np.float32});
-const SPRING_GAIN = np.array([0.12], {dtype: np.float32});
-const basePoints = [];
-for (let gy = 0; gy < GRID; gy++) {
-  for (let gx = 0; gx < GRID; gx++) {
-    basePoints.push([(gx - (GRID - 1) / 2) * STEP, (gy - (GRID - 1) / 2) * STEP]);
-  }
-}
+const KEEP_PUSH = np.array([0.88], {dtype: np.float32}); // 1 - spring_gain
+const baseData = Array.from({length: COUNT}, (_unused, i) => {
+  const gx = i % GRID;
+  const gy = Math.floor(i / GRID);
+  return [
+    (gx - (GRID - 1) / 2) * STEP,
+    (gy - (GRID - 1) / 2) * STEP
+  ];
+});
+const BASE_NORM = np.array(baseData, {dtype: np.float32});
+const BASE_PUSH = np.array(baseData, {dtype: np.float32});
+const BASE_OUT = np.array(baseData, {dtype: np.float32});
+const rowNorm2 = vmap((row) => row.ref.mul(row).sum(), [0]);
 
 return new G9((params) => {
-  const shapes = {};
-  for (let i = 0; i < COUNT; i++) {
-    const key = "p" + i;
-    const baseNorm = np.array(basePoints[i], {dtype: np.float32});
-    const repNorm = np.concatenate([params.rx.ref, params.ry.ref]);
-    const awayNorm = baseNorm.ref.sub(repNorm.ref);
-    const dist2 = awayNorm.ref.mul(awayNorm).sum().add(REPULSE_SOFT.ref);
+  const repellerNorm = np.concatenate([params.rx.ref, params.ry.ref]).reshape([1, 2]);
+  const repellerPush = np.concatenate([params.rx.ref, params.ry.ref]).reshape([1, 2]);
+  const awayNorm = BASE_NORM.ref.sub(repellerNorm.ref);
+  const awayPush = BASE_PUSH.ref.sub(repellerPush.ref);
+  const dist2 = rowNorm2(awayNorm.ref).add(REPULSE_SOFT.ref).reshape([COUNT, 1]);
+  const push = awayPush.ref.mul(REPULSE_GAIN.ref.div(dist2.ref)).mul(KEEP_PUSH.ref);
+  const adjusted = BASE_OUT.ref.add(push.ref);
 
-    const basePush = np.array(basePoints[i], {dtype: np.float32});
-    const repPush = np.concatenate([params.rx.ref, params.ry.ref]);
-    const awayPush = basePush.ref.sub(repPush.ref);
-    const push = awayPush.ref.mul(REPULSE_GAIN.ref.div(dist2.ref));
-
-    const baseDisplaced = np.array(basePoints[i], {dtype: np.float32});
-    const displaced = baseDisplaced.ref.add(push.ref);
-    const baseSpring = np.array(basePoints[i], {dtype: np.float32});
-    const springPull = baseSpring.ref.sub(displaced.ref).mul(SPRING_GAIN.ref);
-    const adjusted = displaced.ref.add(springPull.ref);
-
-    shapes[key] = point(adjusted, {fill: "#111827", r: 3});
-  }
-
+  const shapes = Object.fromEntries(
+    Array.from({length: COUNT}, (_unused, i) => [
+      "p" + i,
+      point(adjusted.ref.slice([i, i + 1]).reshape([2]), {fill: "#111827", r: 3})
+    ])
+  );
   shapes.repeller = point(np.concatenate([params.rx.ref, params.ry.ref]), {
     fill: "#f97316",
     r: 7,
     affects: {rx: true, ry: true},
   });
-
   return shapes;
 }, {rx: [0], ry: [0]});</textarea>
         <button class="run-btn">Run ▶</button>
