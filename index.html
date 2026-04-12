@@ -410,11 +410,15 @@ return new G9((params) => {
       stroke: "#111827",
       "stroke-width": 8,
       "stroke-linecap": "round",
-      affects: {ax: true, ay: true},
+      affects: {ax: true, ay: true, opt: {dragIter: [14]}},
     });
   });
   BASE.forEach((_unused, i) => {
-    shapes["p" + i] = point(projectAt(i), {fill: "#0ea5e9", r: 4, affects: {ax: true, ay: true}});
+    shapes["p" + i] = point(projectAt(i), {
+      fill: "#0ea5e9",
+      r: 4,
+      affects: {ax: true, ay: true, opt: {dragIter: [14]}},
+    });
   });
   return shapes;
 }, {ax: [0.2], ay: [0.45]});</textarea>
@@ -727,7 +731,7 @@ return new G9((params) => {
       <div class="demo-code" data-target="#demo-dragon">
         <textarea>const ROT = np.array([[0,1],[-1,0]], {dtype: np.float32});
 const lineOpts = {"stroke-width": 3, "stroke-linecap": "round",
-  affects: {squareness: true, opt: {dragIter: [6]}}};
+  affects: {squareness: true, opt: {dragIter: [12], regWeight: [0.002]}}};
 
 return new G9((params) => {
   const pts = {};

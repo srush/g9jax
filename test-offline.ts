@@ -1044,7 +1044,7 @@ run("dragon line drag converges better with higher dragIter", () => {
     const ROT = np.array([[0, 1], [-1, 0]], { dtype: np.float32 });
     const g9 = new G9((params: Record<string, any>) => {
       const pts: Record<string, any> = {};
-      const lineOpts = { affects: { squareness: true, opt: { dragIter: [dragIter] } } };
+      const lineOpts = { affects: { squareness: true, opt: { dragIter: [dragIter], regWeight: [0] } } };
       function dragon(fromPt: any, toPt: any, dir: number, level: number, name: string): void {
         if (level === 0) {
           pts[`ln${name}`] = line(np.concatenate([fromPt, toPt]), lineOpts);
@@ -1134,6 +1134,30 @@ run("tree render survives optimization path", () => {
   assert(toList(params[0].value).every(Number.isFinite), "tree deltaAngle should remain finite");
   assert(toList(params[1].value).every(Number.isFinite), "tree startLength should remain finite");
   assert(toList(params[2].value).every(Number.isFinite), "tree attenuation should remain finite");
+});
+
+run("drag regularizer limits parameter displacement from drag start", () => {
+  const runWithRegWeight = (regWeight: number) => {
+    const host = installFakeDom();
+    const g9 = new G9((params: Record<string, any>) => ({ p: point(params.xy) }), { xy: [0, 0] });
+    g9.align("center", "center").insertInto(host as any);
+    const lossFn = (target: any, coords: any) => {
+      const d = coords.p.sub(target);
+      return d.ref.mul(d).sum();
+    };
+    const affects = { xy: true, opt: { dragIter: [10], regWeight: [regWeight] } };
+    (g9 as any)._minimize("p", lossFn, [260, -210], affects, true, undefined);
+    const xy = toList((g9 as any).params[0].value);
+    return Math.hypot(xy[0], xy[1]);
+  };
+
+  const lowNorm = runWithRegWeight(0);
+  const highNorm = runWithRegWeight(20);
+  assert(Number.isFinite(lowNorm) && Number.isFinite(highNorm), "regularizer comparison norms should be finite");
+  assert(
+    highNorm < lowNorm,
+    `higher drag regularizer should shrink movement from drag start, got ${lowNorm} vs ${highNorm}`,
+  );
 });
 
 run("particles demo keeps params finite under minimization", () => {
