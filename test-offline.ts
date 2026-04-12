@@ -599,6 +599,50 @@ run("tree render survives optimization path", () => {
   assert(toList(params[2].value).every(Number.isFinite), "tree attenuation should remain finite");
 });
 
+run("particles demo keeps params finite under minimization", () => {
+  const COUNT = 100;
+  const GRID = 10;
+  const STEP = 28;
+  const initialPos: number[] = [];
+  for (let gy = 0; gy < GRID; gy++) {
+    for (let gx = 0; gx < GRID; gx++) {
+      initialPos.push((gx - (GRID - 1) / 2) * STEP);
+      initialPos.push((gy - (GRID - 1) / 2) * STEP);
+    }
+  }
+
+  const renderFn = (p: any) => {
+    const flat = p.pos;
+    const pts: Record<string, any> = {};
+    for (let i = 0; i < COUNT; i++) {
+      const start = i * 2;
+      const c = i === COUNT - 1
+        ? flat.slice([start, start + 2])
+        : flat.ref.slice([start, start + 2]);
+      pts[`p${i}`] = point(c, { affects: { pos: true } });
+    }
+    return pts;
+  };
+
+  const lossFn = (target: any, coords: any) => {
+    const d = coords.p0.sub(target);
+    return d.ref.mul(d).sum();
+  };
+
+  const params: ParamState[] = [
+    { name: "pos", value: np.array(initialPos, { dtype: np.float32 }) },
+  ];
+
+  let cached: any = undefined;
+  for (const target of [[0, 0], [24, -30], [-18, 26]]) {
+    cached = minimize(params, renderFn as any, lossFn as any, target, { pos: true }, 6, cached);
+  }
+
+  const posVals = toList(params[0].value);
+  assert(posVals.length === COUNT * 2, `expected ${COUNT * 2} particle coordinates`);
+  assert(posVals.every(Number.isFinite), "particle coordinates should remain finite");
+});
+
 run("snake demo runs offline and supports repeated minimization", () => {
   const host = installFakeDom();
   const g9 = new G9(

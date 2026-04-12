@@ -299,6 +299,7 @@ async function main() {
     ["section-points", "#demo-points"],
     ["section-rings", "#demo-rings"],
     ["section-lines", "#demo-lines"],
+    ["section-particles", "#demo-particles"],
     ["section-dragon", "#demo-dragon"],
     ["section-tree", "#demo-tree"],
     ["section-snake", "#demo-snake"],

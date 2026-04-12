@@ -371,6 +371,63 @@ return new G9((params) => {
     </div>
   </div>
 
+  <!-- Demo: Particles -->
+  <div class="demo-section" id="section-particles" style="display:none">
+    <h2>Particles (100)</h2>
+    <p class="desc">100 dots with pairwise repellent forces; drag one and watch the field settle.</p>
+    <div class="demo-card">
+      <div class="demo-loss" id="loss-demo-particles">
+        <span>Loss</span><span class="loss-value">—</span>
+      </div>
+      <div class="demo-canvas" id="demo-particles"></div>
+      <div class="demo-code" data-target="#demo-particles">
+        <textarea>const COUNT = 100;
+const GRID = 10;
+const STEP = 28;
+const CENTER_PULL = 0.06;
+const initialPos = [];
+for (let gy = 0; gy < GRID; gy++) {
+  for (let gx = 0; gx < GRID; gx++) {
+    initialPos.push((gx - (GRID - 1) / 2) * STEP);
+    initialPos.push((gy - (GRID - 1) / 2) * STEP);
+  }
+}
+
+return new G9((params) => {
+  const pts = {};
+  const flat = params.pos;
+  const center = np.concatenate([params.cx.ref, params.cy.ref]);
+  const pick = (arr, i) => {
+    const start = i * 2;
+    const src = i === COUNT - 1 ? arr : arr.ref;
+    return src.slice([start, start + 2]);
+  };
+
+  for (let i = 0; i < COUNT; i++) {
+    const pi = pick(flat, i);
+    const toward = center.ref.sub(pi.ref).mul(CENTER_PULL);
+    const adjusted = pi.ref.add(toward.ref);
+    pts["p" + i] = point(adjusted.ref, {
+      fill: "#111827",
+      r: 3,
+      affects: {pos: true},
+    });
+  }
+
+  pts.repeller = point(center.ref, {
+    fill: "#ef4444",
+    r: 6,
+    affects: {cx: true, cy: true},
+  });
+
+  return pts;
+}, {pos: initialPos, cx: [0], cy: [0]});</textarea>
+        <button class="run-btn">Run ▶</button>
+        <div class="error-msg"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- Demo: Lines -->
   <div class="demo-section" id="section-lines" style="display:none">
     <h2>Lines with affects</h2>
