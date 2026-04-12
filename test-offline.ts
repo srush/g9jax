@@ -433,6 +433,75 @@ run("rings example render path works exactly as in main.ts", () => {
   assert(Math.sign(level0[1]) !== Math.sign(level1[1]), "adjacent levels should rotate in opposite directions");
 });
 
+run("cube demo render path works and stays finite", () => {
+  const SCALE = np.array([260], { dtype: np.float32 });
+  const Z_SHIFT = np.array([2.2], { dtype: np.float32 });
+  const BASE = [
+    [np.array([-0.5], { dtype: np.float32 }), np.array([-0.5], { dtype: np.float32 }), np.array([-0.5], { dtype: np.float32 })],
+    [np.array([-0.5], { dtype: np.float32 }), np.array([-0.5], { dtype: np.float32 }), np.array([0.5], { dtype: np.float32 })],
+    [np.array([-0.5], { dtype: np.float32 }), np.array([0.5], { dtype: np.float32 }), np.array([-0.5], { dtype: np.float32 })],
+    [np.array([-0.5], { dtype: np.float32 }), np.array([0.5], { dtype: np.float32 }), np.array([0.5], { dtype: np.float32 })],
+    [np.array([0.5], { dtype: np.float32 }), np.array([-0.5], { dtype: np.float32 }), np.array([-0.5], { dtype: np.float32 })],
+    [np.array([0.5], { dtype: np.float32 }), np.array([-0.5], { dtype: np.float32 }), np.array([0.5], { dtype: np.float32 })],
+    [np.array([0.5], { dtype: np.float32 }), np.array([0.5], { dtype: np.float32 }), np.array([-0.5], { dtype: np.float32 })],
+    [np.array([0.5], { dtype: np.float32 }), np.array([0.5], { dtype: np.float32 }), np.array([0.5], { dtype: np.float32 })],
+  ];
+  const EDGES = [
+    [0, 1], [0, 2], [0, 4],
+    [1, 3], [1, 5],
+    [2, 3], [2, 6],
+    [3, 7],
+    [4, 5], [4, 6],
+    [5, 7], [6, 7],
+  ];
+  const projectPoint = (x0: any, y0: any, z0: any, axCos: any, axSin: any, ayCos: any, aySin: any) => {
+    const x1 = x0.ref.mul(ayCos.ref).add(z0.ref.mul(aySin.ref));
+    const y1 = y0;
+    const z1 = z0.ref.mul(ayCos.ref).sub(x0.ref.mul(aySin.ref));
+    const x2 = x1;
+    const y2 = y1.ref.mul(axCos.ref).sub(z1.ref.mul(axSin.ref));
+    const z2 = y1.ref.mul(axSin.ref).add(z1.ref.mul(axCos.ref));
+    const depth = z2.ref.add(Z_SHIFT.ref);
+    const px = x2.ref.mul(SCALE.ref).div(depth.ref);
+    const py = y2.ref.mul(SCALE.ref).div(depth.ref);
+    return np.concatenate([px, py]);
+  };
+
+  const renderFn = (params: any) => {
+    const axCos = np.cos(params.ax.ref);
+    const axSin = np.sin(params.ax.ref);
+    const ayCos = np.cos(params.ay.ref);
+    const aySin = np.sin(params.ay.ref);
+    const projected = BASE.map(([x0, y0, z0]) => projectPoint(x0, y0, z0, axCos, axSin, ayCos, aySin));
+    const shapes: Record<string, any> = {};
+    EDGES.forEach(([a, b], i) => {
+      shapes[`e${i}`] = line(np.concatenate([projected[a].ref, projected[b].ref]), {
+        affects: { ax: true, ay: true },
+      });
+    });
+    projected.forEach((pt, i) => {
+      shapes[`p${i}`] = point(pt, { affects: { ax: true, ay: true } });
+    });
+    return shapes;
+  };
+
+  const params: ParamState[] = [
+    { name: "ax", value: np.array([0.2], { dtype: np.float32 }) },
+    { name: "ay", value: np.array([0.45], { dtype: np.float32 }) },
+  ];
+  const initialShapes = renderFn({ ax: params[0].value.ref, ay: params[1].value.ref });
+  assert(Object.keys(initialShapes).length === 20, "cube demo should render 12 edges + 8 points");
+
+  const lossFn = (target: any, coords: any) => {
+    const d = coords.p0.sub(target);
+    return d.ref.mul(d).sum();
+  };
+  minimize(params, renderFn as any, lossFn as any, [60, -20], { ax: true, ay: true }, 5);
+  const ax = toList(params[0].value)[0];
+  const ay = toList(params[1].value)[0];
+  assert(Number.isFinite(ax) && Number.isFinite(ay), "cube rotation params should remain finite");
+});
+
 run("line drag loss minimizes", () => {
   const params: ParamState[] = [
     { name: "line1", value: np.array([-100, -50, 100, -50], { dtype: np.float32 }) },
@@ -787,16 +856,17 @@ run("secondary objectives are summed with main objective", () => {
   assert(xSecondary < xNoSecondary, `secondary penalty should reduce x magnitude (${xSecondary} < ${xNoSecondary})`);
 });
 
-run("blocker wall demo applies strong negative secondary inside wall", () => {
+run("blocker wall demo applies strong positive secondary inside wall", () => {
   const ONE = np.array([1], { dtype: np.float32 });
-  const SHARP = np.array([0.35], { dtype: np.float32 });
-  const WALL_SECONDARY = np.array([-10000], { dtype: np.float32 });
-  const WALL_X0 = np.array([-20], { dtype: np.float32 });
-  const WALL_X1 = np.array([20], { dtype: np.float32 });
+  const SHARP = np.array([0.55], { dtype: np.float32 });
+  const WALL_SECONDARY = np.array([12000], { dtype: np.float32 });
+  const WALL_X0 = np.array([12], { dtype: np.float32 });
+  const WALL_X1 = np.array([96], { dtype: np.float32 });
+  const WALL_HALF_WIDTH = np.array([22], { dtype: np.float32 });
   const WALL_Y0 = np.array([-130], { dtype: np.float32 });
   const WALL_Y1 = np.array([130], { dtype: np.float32 });
-  const WALL_LEFT_SEG = np.array([-20, -130, -20, 130], { dtype: np.float32 });
-  const WALL_RIGHT_SEG = np.array([20, -130, 20, 130], { dtype: np.float32 });
+  const WALL_LEFT_SEG = np.array([12, -130, 12, 130], { dtype: np.float32 });
+  const WALL_RIGHT_SEG = np.array([96, -130, 96, 130], { dtype: np.float32 });
 
   const renderFn = (params: any) => {
     const sigmoid = (x: any) => ONE.ref.div(ONE.ref.add(np.exp(x.neg())));
@@ -806,18 +876,20 @@ run("blocker wall demo applies strong negative secondary inside wall", () => {
       return geMin.ref.mul(leMax.ref);
     };
 
-    const inWallX = insideBand(params.bx, WALL_X0, WALL_X1);
+    const wallMinX = WALL_X0.ref.sub(WALL_HALF_WIDTH.ref);
+    const wallMaxX = WALL_X1.ref.add(WALL_HALF_WIDTH.ref);
+    const inWallX = insideBand(params.bx, wallMinX, wallMaxX);
     const inWallY = insideBand(params.by, WALL_Y0, WALL_Y1);
     const inWall = inWallX.ref.mul(inWallY.ref);
     const shapes: Record<string, any> = {
       wallLeft: line(WALL_LEFT_SEG, {
         stroke: "#111827",
-        "stroke-width": 16,
+        "stroke-width": 44,
         "stroke-linecap": "round",
       }),
       wallRight: line(WALL_RIGHT_SEG, {
         stroke: "#111827",
-        "stroke-width": 16,
+        "stroke-width": 44,
         "stroke-linecap": "round",
       }),
       ball: point(np.concatenate([params.bx.ref, params.by.ref]), {
@@ -844,7 +916,7 @@ run("blocker wall demo applies strong negative secondary inside wall", () => {
   });
   const outsidePenalty = toList((outside as any).secondary.wallBlock)[0];
   const insidePenalty = toList((inside as any).secondary.wallBlock)[0];
-  assert(insidePenalty < outsidePenalty - 9000, `inside wall penalty should be near -10000 (${insidePenalty} vs ${outsidePenalty})`);
+  assert(insidePenalty > outsidePenalty + 9000, `inside wall penalty should be near +12000 (${insidePenalty} vs ${outsidePenalty})`);
 
   const lossFn = (target: any, coords: any) => {
     const d = coords.ball.sub(target);
@@ -855,12 +927,132 @@ run("blocker wall demo applies strong negative secondary inside wall", () => {
     { name: "by", value: np.array([0], { dtype: np.float32 }) },
   ];
   let cached: any = undefined;
-  for (const target of [[-120, 0], [-80, 0], [-40, 0], [0, 0]]) {
+  for (const target of [[-120, 0], [-70, 0], [-20, 0], [30, 0], [55, 0]]) {
     cached = minimize(params, renderFn as any, lossFn as any, target, { bx: true, by: true }, 6, cached);
   }
   const bx = toList(params[0].value)[0];
   const by = toList(params[1].value)[0];
   assert(Number.isFinite(bx) && Number.isFinite(by), "blocker wall params should remain finite");
+  const finalEval = renderFn({
+    bx: np.array([bx], { dtype: np.float32 }),
+    by: np.array([by], { dtype: np.float32 }),
+  });
+  const finalPenalty = toList((finalEval as any).secondary.wallBlock)[0];
+  assert(finalPenalty < 5000, `optimizer should avoid blocked lane after drag targets, got penalty ${finalPenalty}`);
+});
+
+run("mini classifier render path stays stable with reduced grid", () => {
+  const GRID = 17;
+  const CELL_COUNT = GRID * GRID;
+  const AXIS_MIN = -120;
+  const AXIS_MAX = 120;
+  const STEP = (AXIS_MAX - AXIS_MIN) / (GRID - 1);
+  const ONE = np.array([1], { dtype: np.float32 });
+  const SHARP = np.array([10], { dtype: np.float32 });
+  const HIDE = np.array([3600, 3600], { dtype: np.float32 });
+  const TRAINING = [
+    { name: "d0", xy: [-92, -50], cls: 1, color: "#2563eb" },
+    { name: "d1", xy: [-58, -12], cls: 1, color: "#2563eb" },
+    { name: "d2", xy: [-15, 22], cls: 1, color: "#2563eb" },
+    { name: "d3", xy: [30, 66], cls: 1, color: "#2563eb" },
+    { name: "d4", xy: [72, 98], cls: 1, color: "#2563eb" },
+    { name: "d5", xy: [-96, -122], cls: -1, color: "#ef4444" },
+    { name: "d6", xy: [-56, -94], cls: -1, color: "#ef4444" },
+    { name: "d7", xy: [-8, -46], cls: -1, color: "#ef4444" },
+    { name: "d8", xy: [42, 16], cls: -1, color: "#ef4444" },
+    { name: "d9", xy: [94, 56], cls: -1, color: "#ef4444" },
+  ];
+  const MODEL_PARAMS = ["w11", "w12", "w21", "w22", "b1", "b2", "v1", "v2", "b3", "s"];
+  const modelAffects = Object.fromEntries(MODEL_PARAMS.map((name) => [name, true]));
+  const cellCenters = Array.from({ length: CELL_COUNT }, (_unused, i) => {
+    const gx = i % GRID;
+    const gy = Math.floor(i / GRID);
+    return [AXIS_MIN + gx * STEP, AXIS_MIN + gy * STEP];
+  });
+  const initialParams = Object.fromEntries(
+    TRAINING.map((item) => [item.name, item.xy]).concat([
+      ["w11", [1.2]],
+      ["w12", [-1.0]],
+      ["w21", [-1.15]],
+      ["w22", [0.95]],
+      ["b1", [0.0]],
+      ["b2", [0.0]],
+      ["v1", [1.0]],
+      ["v2", [-1.0]],
+      ["b3", [0.0]],
+      ["s", [1.0]],
+    ]),
+  ) as Record<string, number[]>;
+  const params: ParamState[] = Object.entries(initialParams).map(([name, value]) => ({
+    name,
+    value: np.array(value, { dtype: np.float32 }),
+  }));
+
+  const sigmoid = (x: any) => ONE.ref.div(ONE.ref.add(np.exp(x.neg())));
+  const softplus = (x: any) => np.log(np.exp(x).add(ONE.ref));
+  const forwardLogit = (xy: any, model: Record<string, any>) => {
+    const x1 = xy.ref.slice([0, 1]);
+    const y1 = xy.ref.slice([1, 2]);
+    const x2 = xy.ref.slice([0, 1]);
+    const y2 = xy.ref.slice([1, 2]);
+    const h1pre = model.w11.ref.mul(x1.ref).add(model.w12.ref.mul(y1.ref)).add(model.b1.ref);
+    const h2pre = model.w21.ref.mul(x2.ref).add(model.w22.ref.mul(y2.ref)).add(model.b2.ref);
+    const h1 = np.tanh(h1pre.ref);
+    const h2 = np.tanh(h2pre.ref);
+    const out = model.v1.ref.mul(h1.ref).add(model.v2.ref.mul(h2.ref)).add(model.b3.ref);
+    return out.mul(model.s.ref);
+  };
+
+  const renderFn = (all: Record<string, any>) => {
+    const shapes: Record<string, any> = {};
+    const secondary: Record<string, any> = {};
+    const model = Object.fromEntries(MODEL_PARAMS.map((name) => [name, all[name]]));
+    Array.from({ length: CELL_COUNT }, (_unused, i) => {
+      const centerBlue = np.array(cellCenters[i], { dtype: np.float32 });
+      const centerRed = np.array(cellCenters[i], { dtype: np.float32 });
+      const logitBlue = forwardLogit(centerBlue, model);
+      const logitRed = forwardLogit(centerRed, model);
+      const pBlue = sigmoid(logitBlue.mul(SHARP.ref));
+      const pBlue2 = sigmoid(logitRed.mul(SHARP.ref));
+      const blueCoord = centerBlue.ref.add(HIDE.ref.mul(ONE.ref.sub(pBlue.ref)));
+      const redCoord = centerRed.ref.add(HIDE.ref.mul(pBlue2.ref));
+      shapes[`bgb${i}`] = point(blueCoord, { fill: "#dbeafe", r: 5.1, affects: {} });
+      shapes[`bgr${i}`] = point(redCoord, { fill: "#fee2e2", r: 5.1, affects: {} });
+      return null;
+    });
+    TRAINING.forEach((item, i) => {
+      const xy = all[item.name];
+      const logit = forwardLogit(xy, model);
+      const margin = item.cls > 0 ? logit : logit.neg();
+      secondary[`cls${i}`] = softplus(margin.neg());
+      shapes[item.name] = point(xy, {
+        fill: item.color,
+        r: 6,
+        affects: { ...modelAffects, [item.name]: true },
+      });
+    });
+    MODEL_PARAMS.forEach((name, idx) => {
+      const anchorX = np.array([235], { dtype: np.float32 });
+      const anchorY = np.array([-145 + idx * 32], { dtype: np.float32 });
+      const xPos = anchorX.ref.add(model[name].ref.mul(26));
+      const coord = np.concatenate([xPos.ref, anchorY.ref]);
+      shapes[`param_${name}`] = point(coord, {
+        fill: "#8b5cf6",
+        r: 4.5,
+        affects: { [name]: true },
+      });
+    });
+    return { shapes, secondary };
+  };
+
+  const lossFn = (target: any, coords: any) => {
+    const d = coords.d0.sub(target);
+    return d.ref.mul(d).sum();
+  };
+  minimize(params, renderFn as any, lossFn as any, [-80, -30], { d0: true }, 4);
+  const d0 = params.find((p) => p.name === "d0");
+  assert(!!d0, "classifier should include d0 param");
+  assert(toList((d0 as ParamState).value).every(Number.isFinite), "classifier params should remain finite");
 });
 
 run("snake demo runs offline and supports repeated minimization", () => {
