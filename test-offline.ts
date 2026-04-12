@@ -47,16 +47,28 @@ class FakeElement {
   children: FakeElement[] = [];
   textContent = "";
   attrs: Record<string, string> = {};
+  listeners: Record<string, Array<(event: any) => void>> = {};
   classList = {
     add: () => {},
     remove: () => {},
+    contains: () => false,
   };
   appendChild(child: FakeElement): FakeElement { this.children.push(child); return child; }
   removeChild(child: FakeElement): FakeElement { const i = this.children.indexOf(child); if (i >= 0) this.children.splice(i, 1); return child; }
   setAttributeNS(_ns: string | null, key: string, value: string): void { this.attrs[key] = value; }
   setAttribute(key: string, value: string): void { this.attrs[key] = value; }
-  addEventListener(): void {}
-  removeEventListener(): void {}
+  addEventListener(type: string, handler: (event: any) => void): void {
+    (this.listeners[type] ??= []).push(handler);
+  }
+  removeEventListener(type: string, handler: (event: any) => void): void {
+    const list = this.listeners[type];
+    if (!list) return;
+    const idx = list.indexOf(handler);
+    if (idx >= 0) list.splice(idx, 1);
+  }
+  dispatch(type: string, event: any): void {
+    for (const handler of this.listeners[type] ?? []) handler(event);
+  }
   getBoundingClientRect() { return { top: 0, left: 0, width: 800, height: 600 }; }
 }
 
@@ -72,6 +84,54 @@ function installFakeDom(): FakeElement {
   };
   (globalThis as any).window = { addEventListener: () => {}, removeEventListener: () => {} };
   return host;
+}
+
+function installInteractiveFakeDom(): {
+  host: FakeElement;
+  dispatchDocumentEvent: (type: string, event: any) => void;
+} {
+  const host = new FakeElement();
+  const documentListeners = new Map<string, Array<(event: any) => void>>();
+  const activeClasses = new Set<string>();
+  const addDocumentListener = (type: string, handler: (event: any) => void) => {
+    const list = documentListeners.get(type) ?? [];
+    list.push(handler);
+    documentListeners.set(type, list);
+  };
+  const removeDocumentListener = (type: string, handler: (event: any) => void) => {
+    const list = documentListeners.get(type);
+    if (!list) return;
+    const idx = list.indexOf(handler);
+    if (idx >= 0) list.splice(idx, 1);
+  };
+  const dispatchDocumentEvent = (type: string, event: any) => {
+    for (const handler of documentListeners.get(type) ?? []) handler(event);
+  };
+
+  (globalThis as any).document = {
+    createElementNS: () => new FakeElement(),
+    querySelector: () => host,
+    addEventListener: addDocumentListener,
+    removeEventListener: removeDocumentListener,
+    getElementById: () => null,
+    documentElement: {
+      classList: {
+        add: (cls: string) => { activeClasses.add(cls); },
+        remove: (cls: string) => { activeClasses.delete(cls); },
+        contains: (cls: string) => activeClasses.has(cls),
+      },
+    },
+  };
+  (globalThis as any).window = {
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    requestAnimationFrame: () => 1,
+    cancelAnimationFrame: () => {},
+    setInterval: () => 0,
+    clearInterval: () => {},
+    matchMedia: () => ({ matches: false }),
+  };
+  return { host, dispatchDocumentEvent };
 }
 
 // ---------------------------------------------------------------------------
@@ -424,6 +484,40 @@ run("constrained line supports negative projection drag", () => {
   minimize(params, renderFn, lossFn, [-220, 50, -0.5], { line3: [1, 0, 0, 1] }, 8);
   const line3 = toList(params[2].value);
   assert(line3[0] < -100, "line3 x1 should move left for negative projection drag");
+});
+
+run("line drag end does not snap back to drag start", () => {
+  const { host, dispatchDocumentEvent } = installInteractiveFakeDom();
+  const g9 = new G9(
+    (params: Record<string, any>) => ({
+      l1: line(params.line1),
+      l2: line(params.line2, { affects: { line2: [1, 1, 0, 0] } }),
+      l3: line(params.line3, { affects: { line3: [1, 0, 0, 1] } }),
+    }),
+    {
+      line1: [-100, -50, 100, -50],
+      line2: [-100, 0, 100, 0],
+      line3: [-100, 50, 100, 50],
+    },
+  );
+  g9.align("center", "center").insertInto(host as any);
+
+  const lineEl = ((g9 as any).elements.l2 as any).el as FakeElement;
+  const eventAt = (clientX: number, clientY: number) => ({
+    clientX,
+    clientY,
+    cancelable: true,
+    stopPropagation: () => {},
+    preventDefault: () => {},
+  });
+
+  // Start drag at center and pull diagonally.
+  lineEl.dispatch("mousedown", eventAt(400, 300));
+  dispatchDocumentEvent("mousemove", eventAt(440, 320));
+  dispatchDocumentEvent("mouseup", eventAt(440, 320));
+
+  const line2 = toList((g9 as any).params[1].value);
+  assert(Math.abs(line2[1]) > 10, `line2 y1 should stay displaced after mouseup, got ${line2[1]}`);
 });
 
 run("rings radius can repeatedly shrink", () => {

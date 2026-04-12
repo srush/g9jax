@@ -939,23 +939,25 @@ class LineEl {
       const pdx = cx - c[0], pdy = cy - c[1];
       const ll2 = ldx * ldx + ldy * ldy;
       const r = ll2 > 0 ? (pdx * ldx + pdy * ldy) / ll2 : 0;
+      let latestPullX = cx;
+      let latestPullY = cy;
 
       return {
         drag: (dx, dy) => {
-          const pullX = cx + dx;
-          const pullY = cy + dy;
-          this._cached = doMinimize(id, lossFn, [pullX, pullY, r], this.args.affects, false, this._cached);
+          latestPullX = cx + dx;
+          latestPullY = cy + dy;
+          this._cached = doMinimize(id, lossFn, [latestPullX, latestPullY, r], this.args.affects, false, this._cached);
           const model = this._cachedCoords;
           const targetX = model[0] + (model[2] - model[0]) * r;
           const targetY = model[1] + (model[3] - model[1]) * r;
-          this.g9.setDragDebug([pullX, pullY], [targetX, targetY]);
+          this.g9.setDragDebug([latestPullX, latestPullY], [targetX, targetY]);
         },
         end: () => {
           const c = this._cachedCoords;
           const ldx = c[2] - c[0], ldy = c[3] - c[1];
           const ll2 = ldx * ldx + ldy * ldy;
-          const rr = ll2 > 0 ? ((cx - c[0]) * ldx + (cy - c[1]) * ldy) / ll2 : r;
-          this._cached = doMinimize(id, lossFn, [cx, cy, rr], this.args.affects, true, this._cached);
+          const rr = ll2 > 0 ? ((latestPullX - c[0]) * ldx + (latestPullY - c[1]) * ldy) / ll2 : r;
+          this._cached = doMinimize(id, lossFn, [latestPullX, latestPullY, rr], this.args.affects, true, this._cached);
           this.g9.clearDragDebug();
         },
       };
