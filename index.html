@@ -335,7 +335,7 @@ const OFFSETS = np.array(
 );
 
 const ringPt = (offset, angle, radius, scale, dir) => {
-  const a = angle.add(offset.mul(dir.ref));
+  const a = angle.ref.mul(dir.ref).add(offset);
   const r = radius.ref.mul(scale.ref);
   return np.concatenate([np.cos(a.ref).mul(r.ref), np.sin(a).mul(r)]);
 };
@@ -497,12 +497,12 @@ const forwardLogit = (xy, params) => {
   const x2 = xy.ref.slice([0, 1]);
   const y2 = xy.ref.slice([1, 2]);
 
-  const h1pre = params.w11.mul(x1.ref).add(params.w12.mul(y1.ref)).add(params.b1);
-  const h2pre = params.w21.mul(x2.ref).add(params.w22.mul(y2.ref)).add(params.b2);
+  const h1pre = params.w11.ref.mul(x1.ref).add(params.w12.ref.mul(y1.ref)).add(params.b1.ref);
+  const h2pre = params.w21.ref.mul(x2.ref).add(params.w22.ref.mul(y2.ref)).add(params.b2.ref);
   const h1 = np.tanh(h1pre.ref);
   const h2 = np.tanh(h2pre.ref);
-  const out = params.v1.mul(h1.ref).add(params.v2.mul(h2.ref)).add(params.b3);
-  return out.mul(params.s);
+  const out = params.v1.ref.mul(h1.ref).add(params.v2.ref.mul(h2.ref)).add(params.b3.ref);
+  return out.mul(params.s.ref);
 };
 
 return new G9((params) => {
@@ -541,7 +541,7 @@ return new G9((params) => {
   MODEL_PARAMS.forEach((name, idx) => {
     const anchorX = np.array([235], {dtype: np.float32});
     const anchorY = np.array([-145 + idx * 32], {dtype: np.float32});
-    const xPos = anchorX.ref.add(model[name].mul(26));
+    const xPos = anchorX.ref.add(model[name].ref.mul(26));
     const coord = np.concatenate([xPos.ref, anchorY.ref]);
     shapes["param_" + name] = point(coord, {
       fill: PARAM_PT,
