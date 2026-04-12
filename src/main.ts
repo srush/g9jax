@@ -336,9 +336,16 @@ async function main() {
   await nextFrame();
 
   const firstDemo = demos[0];
-  runDemoFromTextarea(firstDemo.sectionId, firstDemo.canvasSelector);
+  try {
+    runDemoFromTextarea(firstDemo.sectionId, firstDemo.canvasSelector);
+    console.log(`${firstDemo.sectionId} ready`);
+  } catch (error: any) {
+    const message = String(error?.message ?? error);
+    console.error(`${firstDemo.sectionId} initial mount failed:`, error);
+    const card = document.querySelector(`.demo-code[data-target="${firstDemo.canvasSelector}"]`);
+    setRunError(card, message);
+  }
   hideBanner();
-  console.log(`${firstDemo.sectionId} ready`);
 
   setupDemoLazyMount(demos.slice(1));
 }
