@@ -47,16 +47,28 @@ class FakeElement {
   children: FakeElement[] = [];
   textContent = "";
   attrs: Record<string, string> = {};
+  listeners: Record<string, Array<(event: any) => void>> = {};
   classList = {
     add: () => {},
     remove: () => {},
+    contains: () => false,
   };
   appendChild(child: FakeElement): FakeElement { this.children.push(child); return child; }
   removeChild(child: FakeElement): FakeElement { const i = this.children.indexOf(child); if (i >= 0) this.children.splice(i, 1); return child; }
   setAttributeNS(_ns: string | null, key: string, value: string): void { this.attrs[key] = value; }
   setAttribute(key: string, value: string): void { this.attrs[key] = value; }
-  addEventListener(): void {}
-  removeEventListener(): void {}
+  addEventListener(type: string, handler: (event: any) => void): void {
+    (this.listeners[type] ??= []).push(handler);
+  }
+  removeEventListener(type: string, handler: (event: any) => void): void {
+    const list = this.listeners[type];
+    if (!list) return;
+    const idx = list.indexOf(handler);
+    if (idx >= 0) list.splice(idx, 1);
+  }
+  dispatch(type: string, event: any): void {
+    for (const handler of this.listeners[type] ?? []) handler(event);
+  }
   getBoundingClientRect() { return { top: 0, left: 0, width: 800, height: 600 }; }
 }
 
@@ -72,6 +84,54 @@ function installFakeDom(): FakeElement {
   };
   (globalThis as any).window = { addEventListener: () => {}, removeEventListener: () => {} };
   return host;
+}
+
+function installInteractiveFakeDom(): {
+  host: FakeElement;
+  dispatchDocumentEvent: (type: string, event: any) => void;
+} {
+  const host = new FakeElement();
+  const documentListeners = new Map<string, Array<(event: any) => void>>();
+  const activeClasses = new Set<string>();
+  const addDocumentListener = (type: string, handler: (event: any) => void) => {
+    const list = documentListeners.get(type) ?? [];
+    list.push(handler);
+    documentListeners.set(type, list);
+  };
+  const removeDocumentListener = (type: string, handler: (event: any) => void) => {
+    const list = documentListeners.get(type);
+    if (!list) return;
+    const idx = list.indexOf(handler);
+    if (idx >= 0) list.splice(idx, 1);
+  };
+  const dispatchDocumentEvent = (type: string, event: any) => {
+    for (const handler of documentListeners.get(type) ?? []) handler(event);
+  };
+
+  (globalThis as any).document = {
+    createElementNS: () => new FakeElement(),
+    querySelector: () => host,
+    addEventListener: addDocumentListener,
+    removeEventListener: removeDocumentListener,
+    getElementById: () => null,
+    documentElement: {
+      classList: {
+        add: (cls: string) => { activeClasses.add(cls); },
+        remove: (cls: string) => { activeClasses.delete(cls); },
+        contains: (cls: string) => activeClasses.has(cls),
+      },
+    },
+  };
+  (globalThis as any).window = {
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    requestAnimationFrame: () => 1,
+    cancelAnimationFrame: () => {},
+    setInterval: () => 0,
+    clearInterval: () => {},
+    matchMedia: () => ({ matches: false }),
+  };
+  return { host, dispatchDocumentEvent };
 }
 
 // ---------------------------------------------------------------------------
@@ -329,33 +389,48 @@ run("basic example survives repeated G9 minimize/render cycles", () => {
 });
 
 run("rings example render path works exactly as in main.ts", () => {
-  const SIDES = 8;
-  const angleOffsets: number[] = [];
-  for (let i = 0; i < SIDES; i++) angleOffsets.push((i / SIDES) * Math.PI * 2);
+  const LEVELS = 5;
+  const PER_LEVEL = 20;
+  const TOTAL = LEVELS * PER_LEVEL;
+  const OFFSET_VALUES = Array.from({ length: TOTAL }, (_unused, i) => (i / PER_LEVEL) * Math.PI * 2);
+  const LEVEL_IDS = Array.from({ length: TOTAL }, (_unused, i) => Math.floor(i / PER_LEVEL));
+  const BASE_RADII = [1.0, 0.84, 0.68, 0.52, 0.36];
+  const DIR = [1, -1, 1, -1, 1];
 
   const radius = np.array([120], { dtype: np.float32 });
   const angle = np.array([0], { dtype: np.float32 });
   const render = (params: { radius: any; angle: any }) => {
     const pts: Record<string, any> = {};
-    for (let i = 0; i < SIDES; i++) {
-      const offset = np.array([angleOffsets[i]], { dtype: np.float32 });
-      const a = params.angle.ref.add(offset);
-      const ox = np.cos(a.ref).mul(params.radius.ref);
-      const oy = np.sin(a.ref).mul(params.radius.ref);
-      pts[`out${i}`] = point(np.concatenate([ox, oy]));
-      const negA = a.neg();
-      const halfR = params.radius.ref.div(2);
-      const ix = np.cos(negA.ref).mul(halfR.ref);
-      const iy = np.sin(negA).mul(halfR);
-      pts[`in${i}`] = point(np.concatenate([ix, iy]), { fill: "#e11d48" });
+    for (let i = 0; i < TOTAL; i++) {
+      const offset = np.array([OFFSET_VALUES[i]], { dtype: np.float32 });
+      const dir = np.array([DIR[LEVEL_IDS[i]]], { dtype: np.float32 });
+      const a = params.angle.ref.mul(dir.ref).add(offset);
+      const baseScale = np.array([BASE_RADII[LEVEL_IDS[i]]], { dtype: np.float32 });
+      const levelRadius = params.radius.ref.mul(baseScale.ref);
+      const px = np.cos(a.ref).mul(levelRadius.ref);
+      const py = np.sin(a).mul(levelRadius);
+      const color = LEVEL_IDS[i] === 0
+        ? "#111827"
+        : LEVEL_IDS[i] === 1
+          ? "#2563eb"
+          : LEVEL_IDS[i] === 2
+            ? "#10b981"
+            : LEVEL_IDS[i] === 3
+              ? "#f59e0b"
+              : "#ef4444";
+      pts[`p${i}`] = point(np.concatenate([px, py]), { fill: color });
     }
     return pts;
   };
 
-  const shapes = render({ radius: radius.ref, angle: angle.ref });
-  assert(Object.keys(shapes).length === 16, "rings example should render 16 points");
-  assert(toList(shapes.out0.c).length === 2, "rings outer point should be 2D");
-  assert(toList(shapes.in0.c).length === 2, "rings inner point should be 2D");
+  const shapes = render({ radius, angle });
+  assert(Object.keys(shapes).length === TOTAL, `rings example should render ${TOTAL} points`);
+  const level0 = toList(shapes.p0.c);
+  const level99 = toList(shapes.p99.c);
+  const level1 = toList(shapes.p20.c);
+  assert(level0.length === 2, "rings point should be 2D");
+  assert(level99.length === 2, "rings final point should be 2D");
+  assert(Math.sign(level0[1]) !== Math.sign(level1[1]), "adjacent levels should rotate in opposite directions");
 });
 
 run("line drag loss minimizes", () => {
@@ -409,6 +484,40 @@ run("constrained line supports negative projection drag", () => {
   minimize(params, renderFn, lossFn, [-220, 50, -0.5], { line3: [1, 0, 0, 1] }, 8);
   const line3 = toList(params[2].value);
   assert(line3[0] < -100, "line3 x1 should move left for negative projection drag");
+});
+
+run("line drag end does not snap back to drag start", () => {
+  const { host, dispatchDocumentEvent } = installInteractiveFakeDom();
+  const g9 = new G9(
+    (params: Record<string, any>) => ({
+      l1: line(params.line1),
+      l2: line(params.line2, { affects: { line2: [1, 1, 0, 0] } }),
+      l3: line(params.line3, { affects: { line3: [1, 0, 0, 1] } }),
+    }),
+    {
+      line1: [-100, -50, 100, -50],
+      line2: [-100, 0, 100, 0],
+      line3: [-100, 50, 100, 50],
+    },
+  );
+  g9.align("center", "center").insertInto(host as any);
+
+  const lineEl = ((g9 as any).elements.l2 as any).el as FakeElement;
+  const eventAt = (clientX: number, clientY: number) => ({
+    clientX,
+    clientY,
+    cancelable: true,
+    stopPropagation: () => {},
+    preventDefault: () => {},
+  });
+
+  // Start drag at center and pull diagonally.
+  lineEl.dispatch("mousedown", eventAt(400, 300));
+  dispatchDocumentEvent("mousemove", eventAt(440, 320));
+  dispatchDocumentEvent("mouseup", eventAt(440, 320));
+
+  const line2 = toList((g9 as any).params[1].value);
+  assert(Math.abs(line2[1]) > 10, `line2 y1 should stay displaced after mouseup, got ${line2[1]}`);
 });
 
 run("rings radius can repeatedly shrink", () => {
@@ -641,6 +750,117 @@ run("particles demo keeps params finite under minimization", () => {
   const posVals = toList(params[0].value);
   assert(posVals.length === COUNT * 2, `expected ${COUNT * 2} particle coordinates`);
   assert(posVals.every(Number.isFinite), "particle coordinates should remain finite");
+});
+
+run("secondary objectives are summed with main objective", () => {
+  const baseRender = (p: any) => {
+    const xy = np.concatenate([p.x.ref, p.y.ref]);
+    return { p0: point(xy, { affects: { x: true, y: true } }) };
+  };
+  const lossFn = (target: any, coords: any) => {
+    const d = coords.p0.sub(target);
+    return d.ref.mul(d).sum();
+  };
+
+  const paramsNoSecondary: ParamState[] = [
+    { name: "x", value: np.array([0], { dtype: np.float32 }) },
+    { name: "y", value: np.array([0], { dtype: np.float32 }) },
+  ];
+  minimize(paramsNoSecondary, baseRender as any, lossFn as any, [30, 0], { x: true, y: true }, 6);
+  const xNoSecondary = Math.abs(toList(paramsNoSecondary[0].value)[0]);
+
+  const penaltyWeight = np.array([4], { dtype: np.float32 });
+  const renderWithSecondary = (p: any) => {
+    const xy = np.concatenate([p.x.ref, p.y.ref]);
+    const springPenalty = p.x.ref.mul(p.x).sum().mul(penaltyWeight.ref);
+    return {
+      shapes: { p0: point(xy, { affects: { x: true, y: true } }) },
+      secondary: { springPenalty },
+    };
+  };
+  const paramsSecondary: ParamState[] = [
+    { name: "x", value: np.array([0], { dtype: np.float32 }) },
+    { name: "y", value: np.array([0], { dtype: np.float32 }) },
+  ];
+  minimize(paramsSecondary, renderWithSecondary as any, lossFn as any, [30, 0], { x: true, y: true }, 6);
+  const xSecondary = Math.abs(toList(paramsSecondary[0].value)[0]);
+  assert(xSecondary < xNoSecondary, `secondary penalty should reduce x magnitude (${xSecondary} < ${xNoSecondary})`);
+});
+
+run("blocker wall demo applies strong negative secondary inside wall", () => {
+  const ONE = np.array([1], { dtype: np.float32 });
+  const SHARP = np.array([0.35], { dtype: np.float32 });
+  const WALL_SECONDARY = np.array([-10000], { dtype: np.float32 });
+  const WALL_X0 = np.array([-20], { dtype: np.float32 });
+  const WALL_X1 = np.array([20], { dtype: np.float32 });
+  const WALL_Y0 = np.array([-130], { dtype: np.float32 });
+  const WALL_Y1 = np.array([130], { dtype: np.float32 });
+  const WALL_LEFT_SEG = np.array([-20, -130, -20, 130], { dtype: np.float32 });
+  const WALL_RIGHT_SEG = np.array([20, -130, 20, 130], { dtype: np.float32 });
+
+  const renderFn = (params: any) => {
+    const sigmoid = (x: any) => ONE.ref.div(ONE.ref.add(np.exp(x.neg())));
+    const insideBand = (value: any, minVal: any, maxVal: any) => {
+      const geMin = sigmoid(value.ref.sub(minVal.ref).mul(SHARP.ref));
+      const leMax = sigmoid(maxVal.ref.sub(value.ref).mul(SHARP.ref));
+      return geMin.ref.mul(leMax.ref);
+    };
+
+    const inWallX = insideBand(params.bx, WALL_X0, WALL_X1);
+    const inWallY = insideBand(params.by, WALL_Y0, WALL_Y1);
+    const inWall = inWallX.ref.mul(inWallY.ref);
+    const shapes: Record<string, any> = {
+      wallLeft: line(WALL_LEFT_SEG, {
+        stroke: "#111827",
+        "stroke-width": 16,
+        "stroke-linecap": "round",
+      }),
+      wallRight: line(WALL_RIGHT_SEG, {
+        stroke: "#111827",
+        "stroke-width": 16,
+        "stroke-linecap": "round",
+      }),
+      ball: point(np.concatenate([params.bx.ref, params.by.ref]), {
+        fill: "#f97316",
+        r: 8,
+        affects: { bx: true, by: true },
+      }),
+    };
+    return {
+      shapes,
+      secondary: {
+        wallBlock: inWall.ref.mul(WALL_SECONDARY.ref),
+      },
+    };
+  };
+
+  const outside = renderFn({
+    bx: np.array([-170], { dtype: np.float32 }),
+    by: np.array([0], { dtype: np.float32 }),
+  });
+  const inside = renderFn({
+    bx: np.array([0], { dtype: np.float32 }),
+    by: np.array([0], { dtype: np.float32 }),
+  });
+  const outsidePenalty = toList((outside as any).secondary.wallBlock)[0];
+  const insidePenalty = toList((inside as any).secondary.wallBlock)[0];
+  assert(insidePenalty < outsidePenalty - 9000, `inside wall penalty should be near -10000 (${insidePenalty} vs ${outsidePenalty})`);
+
+  const lossFn = (target: any, coords: any) => {
+    const d = coords.ball.sub(target);
+    return d.ref.mul(d).sum();
+  };
+  const params: ParamState[] = [
+    { name: "bx", value: np.array([-170], { dtype: np.float32 }) },
+    { name: "by", value: np.array([0], { dtype: np.float32 }) },
+  ];
+  let cached: any = undefined;
+  for (const target of [[-120, 0], [-80, 0], [-40, 0], [0, 0]]) {
+    cached = minimize(params, renderFn as any, lossFn as any, target, { bx: true, by: true }, 6, cached);
+  }
+  const bx = toList(params[0].value)[0];
+  const by = toList(params[1].value)[0];
+  assert(Number.isFinite(bx) && Number.isFinite(by), "blocker wall params should remain finite");
 });
 
 run("snake demo runs offline and supports repeated minimization", () => {

@@ -324,47 +324,47 @@ return new G9((params) => {
       </div>
       <div class="demo-canvas" id="demo-rings"></div>
       <div class="demo-code" data-target="#demo-rings">
-        <textarea>const SIDES = 8;
-const offsets = [];
-for (let i = 0; i < SIDES; i++)
-  offsets.push((i / SIDES) * Math.PI * 2);
-const OFFSETS = np.array(offsets, {dtype: np.float32});
+        <textarea>const LEVELS = 5;
+const PER_LEVEL = 20;
+const TOTAL = LEVELS * PER_LEVEL;
+const LEVEL_SCALE = np.array([1.0, 0.84, 0.68, 0.52, 0.36], {dtype: np.float32});
+const LEVEL_COLORS = ["#111827", "#1d4ed8", "#0ea5e9", "#22c55e", "#f97316"];
+const OFFSETS = np.array(
+  Array.from({length: PER_LEVEL}, (_, i) => (i / PER_LEVEL) * Math.PI * 2),
+  {dtype: np.float32},
+);
 
-const outerPt = (offset, angle, radius) => {
-  const a = angle.add(offset);
-  return np.concatenate([
-    np.cos(a.ref).mul(radius.ref),
-    np.sin(a).mul(radius)]);
+const ringPt = (offset, angle, radius, scale, dir) => {
+  const a = angle.add(offset.mul(dir.ref));
+  const r = radius.ref.mul(scale.ref);
+  return np.concatenate([np.cos(a.ref).mul(r.ref), np.sin(a).mul(r)]);
 };
-const innerPt = (offset, angle, radius) => {
-  const a = angle.add(offset).neg();
-  return np.concatenate([
-    np.cos(a.ref).mul(radius.ref),
-    np.sin(a).mul(radius)]);
-};
-const vmapOuter = vmap(outerPt, [0, null, null]);
-const vmapInner = vmap(innerPt, [0, null, null]);
+const vmapRing = vmap(ringPt, [0, null, null, null, null]);
 
 return new G9((params) => {
-  const outerFlat = vmapOuter(
-    OFFSETS.ref, params.angle.ref, params.radius.ref
-  ).reshape([SIDES * 2]);
-  const halfR = params.radius.div(2);
-  const innerFlat = vmapInner(
-    OFFSETS.ref, params.angle, halfR
-  ).reshape([SIDES * 2]);
+  const rings = Array.from({length: LEVELS}, (_, level) => {
+    const scale = LEVEL_SCALE.ref.slice([level, level + 1]);
+    const direction = np.array([level % 2 === 0 ? 1 : -1], {dtype: np.float32});
+    return vmapRing(OFFSETS.ref, params.angle.ref, params.radius.ref, scale, direction).reshape([PER_LEVEL * 2]);
+  });
+
   const pts = {};
-  for (let i = 0; i < SIDES; i++) {
-    const lo = i === SIDES-1;
-    pts["out"+i] = point(
-      (lo ? outerFlat : outerFlat.ref).slice([i*2, i*2+2]));
-    const li = i === SIDES-1;
-    pts["in"+i] = point(
-      (li ? innerFlat : innerFlat.ref).slice([i*2, i*2+2]),
-      {fill: "#e11d48"});
-  }
+  Array.from({length: TOTAL}, (_, index) => {
+    const level = Math.floor(index / PER_LEVEL);
+    const local = index % PER_LEVEL;
+    const ring = rings[level];
+    const start = local * 2;
+    const coords = local === PER_LEVEL - 1
+      ? ring.slice([start, start + 2])
+      : ring.ref.slice([start, start + 2]);
+    pts["pt" + index] = point(coords, {
+      fill: LEVEL_COLORS[level],
+      r: level === 0 ? 4 : 3,
+    });
+    return null;
+  });
   return pts;
-}, { radius: [120], angle: [0] });</textarea>
+}, { radius: [125], angle: [0] });</textarea>
         <button class="run-btn">Run ▶</button>
         <div class="error-msg"></div>
       </div>
@@ -374,54 +374,184 @@ return new G9((params) => {
   <!-- Demo: Particles -->
   <div class="demo-section" id="section-particles" style="display:none">
     <h2>Particles (100)</h2>
-    <p class="desc">100 dots with pairwise repellent forces; drag one and watch the field settle.</p>
+    <p class="desc">100 dots with an orange repeller and spring-to-origin regularization.</p>
     <div class="demo-card">
       <div class="demo-loss" id="loss-demo-particles">
         <span>Loss</span><span class="loss-value">—</span>
       </div>
       <div class="demo-canvas" id="demo-particles"></div>
       <div class="demo-code" data-target="#demo-particles">
-        <textarea>const COUNT = 100;
-const GRID = 10;
+        <textarea>const GRID = 10;
+const COUNT = GRID * GRID;
 const STEP = 28;
-const CENTER_PULL = 0.06;
-const initialPos = [];
-for (let gy = 0; gy < GRID; gy++) {
-  for (let gx = 0; gx < GRID; gx++) {
-    initialPos.push((gx - (GRID - 1) / 2) * STEP);
-    initialPos.push((gy - (GRID - 1) / 2) * STEP);
-  }
-}
+const REPULSE_GAIN = np.array([3200], {dtype: np.float32});
+const REPULSE_SOFT = np.array([160], {dtype: np.float32});
+const KEEP_PUSH = np.array([0.88], {dtype: np.float32}); // 1 - spring_gain
+const baseData = Array.from({length: COUNT}, (_unused, i) => {
+  const gx = i % GRID;
+  const gy = Math.floor(i / GRID);
+  return [
+    (gx - (GRID - 1) / 2) * STEP,
+    (gy - (GRID - 1) / 2) * STEP
+  ];
+});
+const BASE_NORM = np.array(baseData, {dtype: np.float32});
+const BASE_PUSH = np.array(baseData, {dtype: np.float32});
+const BASE_OUT = np.array(baseData, {dtype: np.float32});
+const rowNorm2 = vmap((row) => row.ref.mul(row).sum(), [0]);
 
 return new G9((params) => {
-  const pts = {};
-  const flat = params.pos;
-  const center = np.concatenate([params.cx.ref, params.cy.ref]);
-  const pick = (arr, i) => {
-    const start = i * 2;
-    const src = i === COUNT - 1 ? arr : arr.ref;
-    return src.slice([start, start + 2]);
-  };
+  const repellerNorm = np.concatenate([params.rx.ref, params.ry.ref]).reshape([1, 2]);
+  const repellerPush = np.concatenate([params.rx.ref, params.ry.ref]).reshape([1, 2]);
+  const awayNorm = BASE_NORM.ref.sub(repellerNorm.ref);
+  const awayPush = BASE_PUSH.ref.sub(repellerPush.ref);
+  const dist2 = rowNorm2(awayNorm.ref).add(REPULSE_SOFT.ref).reshape([COUNT, 1]);
+  const push = awayPush.ref.mul(REPULSE_GAIN.ref.div(dist2.ref)).mul(KEEP_PUSH.ref);
+  const adjusted = BASE_OUT.ref.add(push.ref);
 
-  for (let i = 0; i < COUNT; i++) {
-    const pi = pick(flat, i);
-    const toward = center.ref.sub(pi.ref).mul(CENTER_PULL);
-    const adjusted = pi.ref.add(toward.ref);
-    pts["p" + i] = point(adjusted.ref, {
-      fill: "#111827",
-      r: 3,
-      affects: {pos: true},
-    });
-  }
+  const shapes = Object.fromEntries(
+    Array.from({length: COUNT}, (_unused, i) => [
+      "p" + i,
+      point(adjusted.ref.slice([i, i + 1]).reshape([2]), {fill: "#111827", r: 3})
+    ])
+  );
+  shapes.repeller = point(np.concatenate([params.rx.ref, params.ry.ref]), {
+    fill: "#f97316",
+    r: 7,
+    affects: {rx: true, ry: true},
+  });
+  return shapes;
+}, {rx: [0], ry: [0]});</textarea>
+        <button class="run-btn">Run ▶</button>
+        <div class="error-msg"></div>
+      </div>
+    </div>
+  </div>
 
-  pts.repeller = point(center.ref, {
-    fill: "#ef4444",
-    r: 6,
-    affects: {cx: true, cy: true},
+  <!-- Demo: Mini Classifier -->
+  <div class="demo-section" id="section-classifier" style="display:none">
+    <h2>Mini Classifier (2-layer, 10 params)</h2>
+    <p class="desc">Drag blue/red data points; side parameter points and network weights update to fit classification.</p>
+    <div class="demo-card">
+      <div class="demo-loss" id="loss-demo-classifier">
+        <span>Loss</span><span class="loss-value">—</span>
+      </div>
+      <div class="demo-canvas" id="demo-classifier"></div>
+      <div class="demo-code" data-target="#demo-classifier">
+        <textarea>const GRID = 25;
+const CELL_COUNT = GRID * GRID;
+const AXIS_MIN = -120;
+const AXIS_MAX = 120;
+const STEP = (AXIS_MAX - AXIS_MIN) / (GRID - 1);
+const BLUE_BG = "#dbeafe";
+const RED_BG = "#fee2e2";
+const BLUE_PT = "#2563eb";
+const RED_PT = "#ef4444";
+const PARAM_PT = "#8b5cf6";
+const HIDE = np.array([5000, 5000], {dtype: np.float32});
+const ONE = np.array([1], {dtype: np.float32});
+const SHARP = np.array([10], {dtype: np.float32});
+
+const TRAINING = [
+  {name: "d0", xy: [-92, -50], cls: 1, color: BLUE_PT},
+  {name: "d1", xy: [-58, -12], cls: 1, color: BLUE_PT},
+  {name: "d2", xy: [-15, 22], cls: 1, color: BLUE_PT},
+  {name: "d3", xy: [30, 66], cls: 1, color: BLUE_PT},
+  {name: "d4", xy: [72, 98], cls: 1, color: BLUE_PT},
+  {name: "d5", xy: [-96, -122], cls: -1, color: RED_PT},
+  {name: "d6", xy: [-56, -94], cls: -1, color: RED_PT},
+  {name: "d7", xy: [-8, -46], cls: -1, color: RED_PT},
+  {name: "d8", xy: [42, 16], cls: -1, color: RED_PT},
+  {name: "d9", xy: [94, 56], cls: -1, color: RED_PT},
+];
+
+const MODEL_PARAMS = ["w11", "w12", "w21", "w22", "b1", "b2", "v1", "v2", "b3", "s"];
+const modelAffects = Object.fromEntries(MODEL_PARAMS.map((name) => [name, true]));
+const cellCenters = Array.from({length: CELL_COUNT}, (_, i) => {
+  const gx = i % GRID;
+  const gy = Math.floor(i / GRID);
+  return [AXIS_MIN + gx * STEP, AXIS_MIN + gy * STEP];
+});
+
+const initialParams = Object.fromEntries(
+  TRAINING.map((item) => [item.name, item.xy]).concat([
+    ["w11", [1.2]],
+    ["w12", [-1.0]],
+    ["w21", [-1.15]],
+    ["w22", [0.95]],
+    ["b1", [0.0]],
+    ["b2", [0.0]],
+    ["v1", [1.0]],
+    ["v2", [-1.0]],
+    ["b3", [0.0]],
+    ["s", [1.0]],
+  ])
+);
+
+const sigmoid = (x) => ONE.ref.div(ONE.ref.add(np.exp(x.neg())));
+const softplus = (x) => np.log(np.exp(x).add(ONE.ref));
+
+const forwardLogit = (xy, params) => {
+  const x1 = xy.ref.slice([0, 1]);
+  const y1 = xy.ref.slice([1, 2]);
+  const x2 = xy.ref.slice([0, 1]);
+  const y2 = xy.ref.slice([1, 2]);
+
+  const h1pre = params.w11.mul(x1.ref).add(params.w12.mul(y1.ref)).add(params.b1);
+  const h2pre = params.w21.mul(x2.ref).add(params.w22.mul(y2.ref)).add(params.b2);
+  const h1 = np.tanh(h1pre.ref);
+  const h2 = np.tanh(h2pre.ref);
+  const out = params.v1.mul(h1.ref).add(params.v2.mul(h2.ref)).add(params.b3);
+  return out.mul(params.s);
+};
+
+return new G9((params) => {
+  const shapes = {};
+  const secondary = {};
+  const model = Object.fromEntries(
+    MODEL_PARAMS.map((name) => [name, params[name]])
+  );
+
+  Array.from({length: CELL_COUNT}, (_, i) => {
+    const centerBlue = np.array(cellCenters[i], {dtype: np.float32});
+    const centerRed = np.array(cellCenters[i], {dtype: np.float32});
+    const logitBlue = forwardLogit(centerBlue, model);
+    const logitRed = forwardLogit(centerRed, model);
+    const pBlue = sigmoid(logitBlue.mul(SHARP.ref));
+    const pBlue2 = sigmoid(logitRed.mul(SHARP.ref));
+    const blueCoord = centerBlue.ref.add(HIDE.ref.mul(ONE.ref.sub(pBlue.ref)));
+    const redCoord = centerRed.ref.add(HIDE.ref.mul(pBlue2.ref));
+    shapes["bgb" + i] = point(blueCoord, {fill: BLUE_BG, r: 5.1, affects: {}});
+    shapes["bgr" + i] = point(redCoord, {fill: RED_BG, r: 5.1, affects: {}});
+    return null;
   });
 
-  return pts;
-}, {pos: initialPos, cx: [0], cy: [0]});</textarea>
+  TRAINING.forEach((item, i) => {
+    const xy = params[item.name];
+    const logit = forwardLogit(xy, model);
+    const margin = item.cls > 0 ? logit : logit.neg();
+    secondary["cls" + i] = softplus(margin.neg());
+    shapes[item.name] = point(xy, {
+      fill: item.color,
+      r: 6,
+      affects: {...modelAffects, [item.name]: true},
+    });
+  });
+
+  MODEL_PARAMS.forEach((name, idx) => {
+    const anchorX = np.array([235], {dtype: np.float32});
+    const anchorY = np.array([-145 + idx * 32], {dtype: np.float32});
+    const xPos = anchorX.ref.add(model[name].mul(26));
+    const coord = np.concatenate([xPos.ref, anchorY.ref]);
+    shapes["param_" + name] = point(coord, {
+      fill: PARAM_PT,
+      r: 4.5,
+      affects: {[name]: true},
+    });
+  });
+
+  return {shapes, secondary};
+}, initialParams);</textarea>
         <button class="run-btn">Run ▶</button>
         <div class="error-msg"></div>
       </div>
@@ -451,6 +581,68 @@ return new G9((params) => ({
   line2: [-100,0,100,0],
   line3: [-100,50,100,50],
 });</textarea>
+        <button class="run-btn">Run ▶</button>
+        <div class="error-msg"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Demo: Blocker Wall -->
+  <div class="demo-section" id="section-blocker" style="display:none">
+    <h2>Blocker Wall</h2>
+    <p class="desc">Drag the orange ball. Crossing between the black wall lines adds a <code>-10000</code> secondary score.</p>
+    <div class="demo-card">
+      <div class="demo-loss" id="loss-demo-blocker">
+        <span>Loss</span><span class="loss-value">—</span>
+      </div>
+      <div class="demo-canvas" id="demo-blocker"></div>
+      <div class="demo-code" data-target="#demo-blocker">
+        <textarea>const ONE = np.array([1], {dtype: np.float32});
+const SHARP = np.array([0.35], {dtype: np.float32});
+const WALL_SECONDARY = np.array([-10000], {dtype: np.float32});
+const WALL_X0 = np.array([-20], {dtype: np.float32});
+const WALL_X1 = np.array([20], {dtype: np.float32});
+const WALL_Y0 = np.array([-130], {dtype: np.float32});
+const WALL_Y1 = np.array([130], {dtype: np.float32});
+const WALL_LEFT_SEG = np.array([-20, -130, -20, 130], {dtype: np.float32});
+const WALL_RIGHT_SEG = np.array([20, -130, 20, 130], {dtype: np.float32});
+
+return new G9((params) => {
+  const sigmoid = (x) => ONE.ref.div(ONE.ref.add(np.exp(x.neg())));
+  const insideBand = (value, minVal, maxVal) => {
+    const geMin = sigmoid(value.ref.sub(minVal.ref).mul(SHARP.ref));
+    const leMax = sigmoid(maxVal.ref.sub(value.ref).mul(SHARP.ref));
+    return geMin.ref.mul(leMax.ref);
+  };
+
+  const inWallX = insideBand(params.bx, WALL_X0, WALL_X1);
+  const inWallY = insideBand(params.by, WALL_Y0, WALL_Y1);
+  const inWall = inWallX.ref.mul(inWallY.ref);
+
+  const shapes = {
+    wallLeft: line(WALL_LEFT_SEG, {
+      stroke: "#111827",
+      "stroke-width": 16,
+      "stroke-linecap": "round",
+    }),
+    wallRight: line(WALL_RIGHT_SEG, {
+      stroke: "#111827",
+      "stroke-width": 16,
+      "stroke-linecap": "round",
+    }),
+    ball: point(np.concatenate([params.bx.ref, params.by.ref]), {
+      fill: "#f97316",
+      r: 8,
+      affects: {bx: true, by: true},
+    }),
+  };
+  return {
+    shapes,
+    secondary: {
+      wallBlock: inWall.ref.mul(WALL_SECONDARY.ref),
+    },
+  };
+}, {bx: [-170], by: [0]});</textarea>
         <button class="run-btn">Run ▶</button>
         <div class="error-msg"></div>
       </div>
