@@ -491,16 +491,13 @@ run("cube demo render path works and stays finite", () => {
     { name: "ax", value: np.array([0.2], { dtype: np.float32 }) },
     { name: "ay", value: np.array([0.45], { dtype: np.float32 }) },
   ];
+  const initialAx = 0.2;
+  const initialAy = 0.45;
   const target: [number, number] = [60, -20];
-  const makeCubeParams = () => {
-    const ax = toList(params[0].value)[0];
-    const ay = toList(params[1].value)[0];
-    return {
-      ax: np.array([ax], { dtype: np.float32 }),
-      ay: np.array([ay], { dtype: np.float32 }),
-    };
-  };
-  const initialShapes = renderFn(makeCubeParams());
+  const initialShapes = renderFn({
+    ax: np.array([initialAx], { dtype: np.float32 }),
+    ay: np.array([initialAy], { dtype: np.float32 }),
+  });
   assert(Object.keys(initialShapes).length === 20, "cube demo should render 12 edges + 8 points");
   const initialP0 = toList(initialShapes.p0.c);
   const initialLoss = (initialP0[0] - target[0]) ** 2 + (initialP0[1] - target[1]) ** 2;
@@ -513,7 +510,10 @@ run("cube demo render path works and stays finite", () => {
   const ax = toList(params[0].value)[0];
   const ay = toList(params[1].value)[0];
   assert(Number.isFinite(ax) && Number.isFinite(ay), "cube rotation params should remain finite");
-  const finalShapes = renderFn(makeCubeParams());
+  const finalShapes = renderFn({
+    ax: np.array([ax], { dtype: np.float32 }),
+    ay: np.array([ay], { dtype: np.float32 }),
+  });
   const finalP0 = toList(finalShapes.p0.c);
   const finalLoss = (finalP0[0] - target[0]) ** 2 + (finalP0[1] - target[1]) ** 2;
   assert(finalLoss < initialLoss, `cube p0 should move toward target, loss ${initialLoss} -> ${finalLoss}`);
