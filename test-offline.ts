@@ -12,6 +12,7 @@ import {
   setG9LineSearchEnabled,
   getG9DebugLossStats,
 } from "./src/g9";
+import { shouldReuseMountedDemo } from "./src/demo-run-policy";
 
 if (typeof (globalThis as { Float16Array?: typeof Float32Array }).Float16Array === "undefined") {
   (globalThis as { Float16Array: typeof Float32Array }).Float16Array = Float32Array;
@@ -587,6 +588,21 @@ run("line drag end does not snap back to drag start", () => {
 
   const line2 = toList((g9 as any).params[1].value);
   assert(Math.abs(line2[1]) > 10, `line2 y1 should stay displaced after mouseup, got ${line2[1]}`);
+});
+
+run("run policy forces remount for lines demo", () => {
+  assert(
+    shouldReuseMountedDemo("#demo-points", true, "a", "a", false),
+    "points demo should reuse mount when unchanged",
+  );
+  assert(
+    !shouldReuseMountedDemo("#demo-lines", true, "a", "a", false),
+    "lines demo should force remount on Run",
+  );
+  assert(
+    !shouldReuseMountedDemo("#demo-points", true, "a", "a", true),
+    "force remount should disable reuse",
+  );
 });
 
 run("rings radius can repeatedly shrink", () => {

@@ -9,6 +9,7 @@ import {
   getG9DebugLossStats,
 } from "./g9";
 import { defaultDevice, init, vmap, type Device } from "@jax-js/jax";
+import { shouldReuseMountedDemo } from "./demo-run-policy";
 
 function show(id: string) {
   const el = document.getElementById(id);
@@ -51,7 +52,7 @@ const demoMountState = new Map<string, G9>();
 const demoSourceState = new Map<string, string>();
 const queuedDemoTargets = new Set<string>();
 
-function runDemoFromTextarea(sectionId: string, canvasSelector: string) {
+function runDemoFromTextarea(sectionId: string, canvasSelector: string, forceRemount = false) {
   const section = document.getElementById(sectionId);
   if (!section) return;
   show(sectionId);
@@ -61,7 +62,7 @@ function runDemoFromTextarea(sectionId: string, canvasSelector: string) {
   const card = section.querySelector(`.demo-code[data-target="${canvasSelector}"]`);
   const existing = demoMountState.get(canvasSelector);
   const previousSource = demoSourceState.get(canvasSelector);
-  if (existing && previousSource === source) {
+  if (shouldReuseMountedDemo(canvasSelector, !!existing, previousSource, source, forceRemount)) {
     existing.render();
     updateDemoLoss(card, null);
     return;
@@ -91,7 +92,7 @@ function runDemoFromCard(card: Element): void {
   const sectionId = section?.id ?? "";
   const canvasSelector = card instanceof HTMLElement ? card.dataset.target ?? "" : "";
   if (!sectionId || !canvasSelector) return;
-  runDemoFromTextarea(sectionId, canvasSelector);
+  runDemoFromTextarea(sectionId, canvasSelector, true);
 }
 
 function bindRunButtons(): void {
