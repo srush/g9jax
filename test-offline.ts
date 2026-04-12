@@ -941,6 +941,77 @@ run("blocker wall demo applies strong positive secondary inside wall", () => {
   assert(finalPenalty < 5000, `optimizer should avoid blocked lane after drag targets, got penalty ${finalPenalty}`);
 });
 
+run("blocker wall demo survives repeated render calls", () => {
+  const ONE = np.array([1], { dtype: np.float32 });
+  const SHARP = np.array([0.55], { dtype: np.float32 });
+  const WALL_SECONDARY = np.array([12000], { dtype: np.float32 });
+  const WALL_X0 = np.array([12], { dtype: np.float32 });
+  const WALL_X1 = np.array([96], { dtype: np.float32 });
+  const WALL_HALF_WIDTH = np.array([22], { dtype: np.float32 });
+  const WALL_Y0 = np.array([-130], { dtype: np.float32 });
+  const WALL_Y1 = np.array([130], { dtype: np.float32 });
+  const WALL_LEFT_SEG = np.array([12, -130, 12, 130], { dtype: np.float32 });
+  const WALL_RIGHT_SEG = np.array([96, -130, 96, 130], { dtype: np.float32 });
+
+  const renderFn = (params: any) => {
+    const sigmoid = (x: any) => ONE.ref.div(ONE.ref.add(np.exp(x.neg())));
+    const insideBand = (value: any, minVal: any, maxVal: any) => {
+      const geMin = sigmoid(value.ref.sub(minVal.ref).mul(SHARP.ref));
+      const leMax = sigmoid(maxVal.ref.sub(value.ref).mul(SHARP.ref));
+      return geMin.ref.mul(leMax.ref);
+    };
+
+    const wallMinX = WALL_X0.ref.sub(WALL_HALF_WIDTH.ref);
+    const wallMaxX = WALL_X1.ref.add(WALL_HALF_WIDTH.ref);
+    const inWallX = insideBand(params.bx, wallMinX, wallMaxX);
+    const inWallY = insideBand(params.by, WALL_Y0, WALL_Y1);
+    const inWall = inWallX.ref.mul(inWallY.ref);
+
+    const shapes: Record<string, any> = {
+      wallLeft: line(WALL_LEFT_SEG.ref, {
+        stroke: "#111827",
+        "stroke-width": 44,
+        "stroke-linecap": "round",
+      }),
+      wallRight: line(WALL_RIGHT_SEG.ref, {
+        stroke: "#111827",
+        "stroke-width": 44,
+        "stroke-linecap": "round",
+      }),
+      ball: point(np.concatenate([params.bx.ref, params.by.ref]), {
+        fill: "#f97316",
+        r: 8,
+        affects: { bx: true, by: true },
+      }),
+    };
+    return {
+      shapes,
+      secondary: {
+        wallBlock: inWall.ref.mul(WALL_SECONDARY.ref),
+      },
+    };
+  };
+
+  const host = installFakeDom();
+  const g9 = new G9(renderFn as any, { bx: [-170], by: [0] });
+  g9.align("center", "center").insertInto(host as any);
+
+  const lossFn = (target: any, coords: any) => {
+    const d = coords.ball.sub(target);
+    return d.ref.mul(d).sum();
+  };
+
+  let cached: any = undefined;
+  for (const target of [[-120, 0], [-80, 0], [-40, 0], [10, 0], [40, 0]]) {
+    cached = minimize((g9 as any).params, (g9 as any).renderFn, lossFn, target, { bx: true, by: true }, 5, cached);
+    g9.render();
+  }
+
+  const bx = toList((g9 as any).params[0].value)[0];
+  const by = toList((g9 as any).params[1].value)[0];
+  assert(Number.isFinite(bx) && Number.isFinite(by), "blocker params should remain finite after repeated renders");
+});
+
 run("mini classifier render path stays stable with reduced grid", () => {
   const GRID = 17;
   const CELL_COUNT = GRID * GRID;
