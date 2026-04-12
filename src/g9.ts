@@ -47,6 +47,15 @@ type RenderFn = (
   params: Record<string, any>,
 ) => RenderOutput;
 
+type AffectOptions = {
+  dragIter?: number | number[];
+};
+
+type AffectsConfig = Record<string, any> & {
+  opt?: AffectOptions;
+  dragIter?: number | number[]; // legacy support
+};
+
 type RuntimeStats = {
   minimizeCalls: number;
   jitBuilds: number;
@@ -900,10 +909,18 @@ class LineEl {
     addDrag(this.el, (evt) => {
       this._cached.lastConverged = false;
       this._cached.lastHitLimit = false;
-      const affectsRaw = this.args.affects;
-      const dragAffects = affectsRaw && typeof affectsRaw === "object" && !Array.isArray(affectsRaw)
-        ? ("dragIter" in affectsRaw ? affectsRaw : { ...affectsRaw, dragIter: [24] })
-        : { dragIter: [24] };
+      const affectsRaw = this.args.affects as AffectsConfig | undefined;
+      const dragAffects: AffectsConfig = affectsRaw && typeof affectsRaw === "object" && !Array.isArray(affectsRaw)
+        ? {
+          ...affectsRaw,
+          opt: {
+            ...(affectsRaw.opt && typeof affectsRaw.opt === "object" ? affectsRaw.opt : {}),
+            dragIter: (affectsRaw.opt && typeof affectsRaw.opt === "object" && "dragIter" in affectsRaw.opt)
+              ? affectsRaw.opt.dragIter
+              : ("dragIter" in affectsRaw ? affectsRaw.dragIter : [24]),
+          },
+        }
+        : { opt: { dragIter: [24] } };
       const c = this._cachedCoords.slice();
       const off = g9.getOffset();
       const cx = evt.clientX - off.left;
@@ -1303,13 +1320,26 @@ export class G9 {
     forceRender = false,
     cached?: CachedJit,
   ): CachedJit {
-    const affectsObj = affects ?? {};
-    const dragIterRaw = "dragIter" in affectsObj ? (affectsObj as any).dragIter : null;
+    const affectsObj: AffectsConfig = (affects && typeof affects === "object" && !Array.isArray(affects))
+      ? affects as AffectsConfig
+      : {};
+    const hasOptKey = Object.prototype.hasOwnProperty.call(affectsObj, "opt");
+    const hasLegacyDragIterKey = Object.prototype.hasOwnProperty.call(affectsObj, "dragIter");
+    const optObj = hasOptKey && affectsObj.opt && typeof affectsObj.opt === "object"
+      ? affectsObj.opt
+      : null;
+    const dragIterRaw = optObj && Object.prototype.hasOwnProperty.call(optObj, "dragIter")
+      ? optObj.dragIter
+      : (hasLegacyDragIterKey ? affectsObj.dragIter : null);
     const dragIterOverride = dragIterRaw == null
       ? NaN
       : Array.isArray(dragIterRaw)
         ? Number(dragIterRaw[0])
         : Number(dragIterRaw);
+    const affectEntries = Object.entries(affectsObj).filter(([key]) => key !== "opt" && key !== "dragIter");
+    const affectsForGrad: Record<string, any> | null | undefined = affectEntries.length > 0
+      ? Object.fromEntries(affectEntries)
+      : (hasOptKey || hasLegacyDragIterKey ? null : affects);
     const maxIterCap = Number.isFinite(dragIterOverride)
       ? Math.max(0, Math.floor(dragIterOverride))
       : lineSearchEnabled
@@ -1320,7 +1350,7 @@ export class G9 {
     });
     const shouldRun = !cached || targetChanged || (!cached.lastConverged && !cached.lastHitLimit);
     const dragIterations = shouldRun ? maxIterCap : 0;
-    const c = minimize(this.params, this.renderFn, lossFn, target, affects, dragIterations, cached);
+    const c = minimize(this.params, this.renderFn, lossFn, target, affectsForGrad, dragIterations, cached);
     emitOptimizeLoss(this.containerId, c.lastLoss);
     this._dragRenderCounter += 1;
     // Always render when the drag target moves so a single moved frame cannot get skipped.

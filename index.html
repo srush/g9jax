@@ -631,12 +631,12 @@ return new G9((params) => ({
   }),
   startOnly: line(params.startOnly, {
     stroke: "#e11d48",
-    affects: {startOnly: [1,1,0,0], dragIter: [24]},
+    affects: {startOnly: [1,1,0,0], opt: {dragIter: [24]}},
     ...opts
   }),
   endOnly: line(params.endOnly, {
     stroke: "#2563eb",
-    affects: {endOnly: [0,0,1,1], dragIter: [24]},
+    affects: {endOnly: [0,0,1,1], opt: {dragIter: [24]}},
     ...opts
   }),
 }), {
@@ -727,7 +727,7 @@ return new G9((params) => {
       <div class="demo-code" data-target="#demo-dragon">
         <textarea>const ROT = np.array([[0,1],[-1,0]], {dtype: np.float32});
 const lineOpts = {"stroke-width": 3, "stroke-linecap": "round",
-  affects: {squareness: true, dragIter: [6]}};
+  affects: {squareness: true, opt: {dragIter: [6]}}};
 
 return new G9((params) => {
   const pts = {};
@@ -896,8 +896,8 @@ return new G9((params) => {
   for (let i = 0; i < 4; i++) {
     const dir = i % 2 === 0 ? -1 : 1;
     const localAffects = i < 3
-      ? {b: true, dragIter: [1]}
-      : {a: true, dragIter: [1]};
+      ? {b: true, opt: {dragIter: [1]}}
+      : {a: true, opt: {dragIter: [1]}};
     const nx = x.ref.add(np.cos(params.b.ref).mul(SEGMENT));
     const nyTop = yTop.ref.add(np.sin(params.b.ref).mul(SEGMENT * dir));
     const nyBottom = yBottom.ref.sub(np.sin(params.b.ref).mul(SEGMENT * dir));
