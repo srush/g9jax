@@ -797,10 +797,12 @@ run("dragon render survives optimization path", () => {
   const initialLoss = (initialFrom[0] - target[0]) ** 2 + (initialFrom[1] - target[1]) ** 2;
   minimize(params, renderFn, lossFn, target, null, 3);
   const fromAfter = toList(params[0].value);
+  const toAfter = toList(params[1].value);
+  const squarenessAfter = toList(params[2].value);
   const finalLoss = (fromAfter[0] - target[0]) ** 2 + (fromAfter[1] - target[1]) ** 2;
-  assert(toList(params[0].value).every(Number.isFinite), "dragon fromPt should remain finite");
-  assert(toList(params[1].value).every(Number.isFinite), "dragon toPt should remain finite");
-  assert(toList(params[2].value).every(Number.isFinite), "dragon squareness should remain finite");
+  assert(fromAfter.every(Number.isFinite), "dragon fromPt should remain finite");
+  assert(toAfter.every(Number.isFinite), "dragon toPt should remain finite");
+  assert(squarenessAfter.every(Number.isFinite), "dragon squareness should remain finite");
   assert(finalLoss < initialLoss, `dragon start point should move toward target, loss ${initialLoss} -> ${finalLoss}`);
 });
 
