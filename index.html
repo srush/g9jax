@@ -44,22 +44,6 @@
       color: var(--muted);
       font-size: 1.1rem;
     }
-    .hero .badges {
-      margin-top: 1rem;
-      display: flex;
-      gap: 0.5rem;
-      justify-content: center;
-      flex-wrap: wrap;
-    }
-    .badge {
-      display: inline-block;
-      padding: 0.2rem 0.65rem;
-      border-radius: 999px;
-      font-size: 0.8rem;
-      font-weight: 500;
-      background: #e0f2fe;
-      color: #0369a1;
-    }
     .hero-controls {
       margin-top: 0.75rem;
       display: flex;
@@ -262,12 +246,6 @@
   <p>Automatically interactive graphics powered by
     <a href="https://github.com/ekzhang/jax-js" style="color:var(--accent);text-decoration:none;">jax-js</a>
     reverse-mode gradients. Drag the shapes!</p>
-  <div class="badges">
-    <span class="badge">jit(grad) reverse-mode AD</span>
-    <span class="badge">jax-js</span>
-    <span class="badge">SVG</span>
-    <span class="badge">vmap</span>
-  </div>
   <div class="hero-controls">
     <div class="select-inline">
       <label for="backend-select">Backend:</label>
@@ -294,7 +272,7 @@
   <!-- Demo: Basic Points -->
   <div class="demo-section" id="section-points" style="display:none">
     <h2>Basic</h2>
-    <p class="desc">Two points: one at (x, y) and one at (y, x). Drag one and the other mirrors it.</p>
+    <p class="desc">Drag either point; the other mirrors its coordinates as (x, y) -> (y, x).</p>
     <div class="demo-card">
       <div class="demo-loss" id="loss-demo-points">
         <span>Loss</span><span class="loss-value">—</span>
@@ -317,7 +295,7 @@ return new G9((params) => {
   <!-- Demo: Rings -->
   <div class="demo-section" id="section-rings" style="display:none">
     <h2>Rings</h2>
-    <p class="desc">Points arranged in two concentric circles using trigonometry. All controlled by radius and angle parameters.</p>
+    <p class="desc">Five colored rings rotate in alternating directions from shared radius and angle parameters.</p>
     <div class="demo-card">
       <div class="demo-loss" id="loss-demo-rings">
         <span>Loss</span><span class="loss-value">—</span>
@@ -374,7 +352,7 @@ return new G9((params) => {
   <!-- Demo: Cube -->
   <div class="demo-section" id="section-cube" style="display:none">
     <h2>Cube</h2>
-    <p class="desc">Drag cube edges to rotate a projected 3D wireframe.</p>
+    <p class="desc">Drag any cube edge to rotate a projected 3D wireframe.</p>
     <div class="demo-card">
       <div class="demo-loss" id="loss-demo-cube">
         <span>Loss</span><span class="loss-value">—</span>
@@ -449,7 +427,7 @@ return new G9((params) => {
   <!-- Demo: Particles -->
   <div class="demo-section" id="section-particles" style="display:none">
     <h2>Particles (100)</h2>
-    <p class="desc">100 dots with an orange repeller and spring-to-origin regularization.</p>
+    <p class="desc">A 10x10 particle field with an orange repeller and spring-to-origin regularization.</p>
     <div class="demo-card">
       <div class="demo-loss" id="loss-demo-particles">
         <span>Loss</span><span class="loss-value">—</span>
@@ -506,7 +484,7 @@ return new G9((params) => {
   <!-- Demo: Mini Classifier (temporarily disabled from auto-mount) -->
   <div class="demo-section" id="section-classifier" style="display:none">
     <h2>Mini Classifier (2-layer, 10 params)</h2>
-    <p class="desc">Drag blue/red data points; side parameter points and network weights update to fit classification.</p>
+    <p class="desc">Drag blue/red samples; side parameter points and network weights update to fit the classes.</p>
     <div class="demo-card">
       <div class="demo-loss" id="loss-demo-classifier">
         <span>Loss</span><span class="loss-value">—</span>
@@ -636,25 +614,35 @@ return new G9((params) => {
   <!-- Demo: Lines -->
   <div class="demo-section" id="section-lines" style="display:none">
     <h2>Lines with affects</h2>
-    <p class="desc">Three lines with different <code>affects</code> constraints controlling which endpoints can move.</p>
+    <p class="desc">Three lines: one free, one start-constrained, and one end-constrained via affects masks.</p>
     <div class="demo-card">
       <div class="demo-loss" id="loss-demo-lines">
         <span>Loss</span><span class="loss-value">—</span>
       </div>
       <div class="demo-canvas" id="demo-lines"></div>
       <div class="demo-code" data-target="#demo-lines">
-        <textarea>const opts = {"stroke-width": 8};
+        <textarea>const opts = {"stroke-width": 9, "stroke-linecap": "round"};
 
 return new G9((params) => ({
-  l1: line(params.line1, {stroke: "black", ...opts}),
-  l2: line(params.line2, {stroke: "#e11d48",
-       affects: {line2: [1,1,0,0]}, ...opts}),
-  l3: line(params.line3, {stroke: "#2563eb",
-       affects: {line3: [1,0,0,1]}, ...opts}),
+  free: line(params.free, {
+    stroke: "#111827",
+    affects: {free: true},
+    ...opts
+  }),
+  startOnly: line(params.startOnly, {
+    stroke: "#e11d48",
+    affects: {startOnly: [1,1,0,0], dragIter: [24]},
+    ...opts
+  }),
+  endOnly: line(params.endOnly, {
+    stroke: "#2563eb",
+    affects: {endOnly: [0,0,1,1], dragIter: [24]},
+    ...opts
+  }),
 }), {
-  line1: [-100,-50,100,-50],
-  line2: [-100,0,100,0],
-  line3: [-100,50,100,50],
+  free: [-140,-70,140,-70],
+  startOnly: [-140,0,140,0],
+  endOnly: [-140,70,140,70],
 });</textarea>
         <button class="run-btn">Run ▶</button>
         <div class="error-msg"></div>
@@ -730,7 +718,7 @@ return new G9((params) => {
   <!-- Demo: Dragon Curve -->
   <div class="demo-section" id="section-dragon" style="display:none">
     <h2>Dragon Curve</h2>
-    <p class="desc">A recursive dragon curve. Drag the endpoints or the curve to change its squareness.</p>
+    <p class="desc">Recursive dragon curve with draggable endpoints and squareness control on segments.</p>
     <div class="demo-card">
       <div class="demo-loss" id="loss-demo-dragon">
         <span>Loss</span><span class="loss-value">—</span>
@@ -774,7 +762,7 @@ return new G9((params) => {
   <!-- Demo: Tree -->
   <div class="demo-section" id="section-tree" style="display:none">
     <h2>Fractal Tree</h2>
-    <p class="desc">A recursive tree. Drag branches to change the split angle and attenuation.</p>
+    <p class="desc">Recursive tree branches; drag to tune split angle, trunk length, and attenuation.</p>
     <div class="demo-card">
       <div class="demo-loss" id="loss-demo-tree">
         <span>Loss</span><span class="loss-value">—</span>
@@ -825,7 +813,7 @@ return new G9((params) => {
   <!-- Demo: Snake -->
   <div class="demo-section" id="section-snake" style="display:none">
     <h2>Snake</h2>
-    <p class="desc">A chained polyline controlled by cumulative turn angles.</p>
+    <p class="desc">Cumulative-turn polyline where each segment can be pulled independently.</p>
     <div class="demo-card">
       <div class="demo-loss" id="loss-demo-snake">
         <span>Loss</span><span class="loss-value">—</span>
@@ -881,7 +869,7 @@ return new G9((params) => {
   <!-- Demo: Tongs -->
   <div class="demo-section" id="section-tongs" style="display:none">
     <h2>Tongs</h2>
-    <p class="desc">Linked segments with angle and opening controls.</p>
+    <p class="desc">Linked tong arms with opening and global rotation controls.</p>
     <div class="demo-card">
       <div class="demo-loss" id="loss-demo-tongs">
         <span>Loss</span><span class="loss-value">—</span>

@@ -1,9 +1,10 @@
-import { numpy as np, vmap } from "@jax-js/jax";
+import { vmap } from "@jax-js/jax";
 import {
   G9,
   minimize,
   point,
   line,
+  np,
   getG9RuntimeStats,
   resetG9RuntimeStats,
   getG9DragDebugEnabled,
@@ -296,6 +297,10 @@ run("line-search converges better with more iterations on hard rings path", () =
   }
 });
 
+run("debug mode defaults to enabled", () => {
+  assert(getG9DragDebugEnabled(), "debug mode should default to enabled");
+});
+
 run("debug mode tracks average optimization loss", () => {
   const prevDebug = getG9DragDebugEnabled();
   setG9DragDebugEnabled(true);
@@ -490,17 +495,53 @@ run("cube demo render path works and stays finite", () => {
     { name: "ax", value: np.array([0.2], { dtype: np.float32 }) },
     { name: "ay", value: np.array([0.45], { dtype: np.float32 }) },
   ];
-  const initialShapes = renderFn({ ax: params[0].value.ref, ay: params[1].value.ref });
+  const initialAx = 0.2;
+  const initialAy = 0.45;
+  const target: [number, number] = [60, -20];
+  const initialShapes = renderFn({
+    ax: np.array([initialAx], { dtype: np.float32 }),
+    ay: np.array([initialAy], { dtype: np.float32 }),
+  });
   assert(Object.keys(initialShapes).length === 20, "cube demo should render 12 edges + 8 points");
+  const initialP0 = toList(initialShapes.p0.c);
+  const initialLoss = (initialP0[0] - target[0]) ** 2 + (initialP0[1] - target[1]) ** 2;
 
   const lossFn = (target: any, coords: any) => {
     const d = coords.p0.sub(target);
     return d.ref.mul(d).sum();
   };
-  minimize(params, renderFn as any, lossFn as any, [60, -20], { ax: true, ay: true }, 5);
+  minimize(params, renderFn as any, lossFn as any, target, { ax: true, ay: true }, 5);
   const ax = toList(params[0].value)[0];
   const ay = toList(params[1].value)[0];
   assert(Number.isFinite(ax) && Number.isFinite(ay), "cube rotation params should remain finite");
+  const finalShapes = renderFn({
+    ax: np.array([ax], { dtype: np.float32 }),
+    ay: np.array([ay], { dtype: np.float32 }),
+  });
+  const finalP0 = toList(finalShapes.p0.c);
+  const finalLoss = (finalP0[0] - target[0]) ** 2 + (finalP0[1] - target[1]) ** 2;
+  assert(finalLoss < initialLoss, `cube p0 should move toward target, loss ${initialLoss} -> ${finalLoss}`);
+  const runCubeWithIter = (iter: number) => {
+    const runParams: ParamState[] = [
+      { name: "ax", value: np.array([initialAx], { dtype: np.float32 }) },
+      { name: "ay", value: np.array([initialAy], { dtype: np.float32 }) },
+    ];
+    minimize(runParams, renderFn as any, lossFn as any, target, { ax: true, ay: true }, iter);
+    const runAx = toList(runParams[0].value)[0];
+    const runAy = toList(runParams[1].value)[0];
+    const runShapes = renderFn({
+      ax: np.array([runAx], { dtype: np.float32 }),
+      ay: np.array([runAy], { dtype: np.float32 }),
+    });
+    const runP0 = toList(runShapes.p0.c);
+    return (runP0[0] - target[0]) ** 2 + (runP0[1] - target[1]) ** 2;
+  };
+  const cubeLossIter2 = runCubeWithIter(2);
+  const cubeLossIter8 = runCubeWithIter(8);
+  assert(
+    cubeLossIter8 < cubeLossIter2,
+    `cube should improve with more iterations, loss ${cubeLossIter2} -> ${cubeLossIter8}`,
+  );
 });
 
 run("line drag loss minimizes", () => {
@@ -554,6 +595,79 @@ run("constrained line supports negative projection drag", () => {
   minimize(params, renderFn, lossFn, [-220, 50, -0.5], { line3: [1, 0, 0, 1] }, 8);
   const line3 = toList(params[2].value);
   assert(line3[0] < -100, "line3 x1 should move left for negative projection drag");
+});
+
+run("constrained line responds to horizontal drag in one move event", () => {
+  const { host, dispatchDocumentEvent } = installInteractiveFakeDom();
+  const g9 = new G9(
+    (params: Record<string, any>) => ({
+      l2: line(params.line2, { affects: { line2: [1, 1, 0, 0] } }),
+    }),
+    {
+      line2: [-100, 0, 100, 0],
+    },
+  );
+  g9.align("center", "center").insertInto(host as any);
+
+  const lineEl = ((g9 as any).elements.l2 as any).el as FakeElement;
+  const eventAt = (clientX: number, clientY: number) => ({
+    clientX,
+    clientY,
+    cancelable: true,
+    stopPropagation: () => {},
+    preventDefault: () => {},
+  });
+
+  lineEl.dispatch("mousedown", eventAt(400, 300));
+  dispatchDocumentEvent("mousemove", eventAt(520, 300));
+  dispatchDocumentEvent("mouseup", eventAt(520, 300));
+
+  const line2 = toList((g9 as any).params[0].value);
+  assert(line2[0] > 20, `x1 should move right after single horizontal drag event, got ${line2[0]}`);
+});
+
+run("line drag debug markers are visible during drag and hidden on release", () => {
+  const prevDebug = getG9DragDebugEnabled();
+  setG9DragDebugEnabled(true);
+  try {
+    const { host, dispatchDocumentEvent } = installInteractiveFakeDom();
+    const g9 = new G9(
+      (params: Record<string, any>) => ({
+        l2: line(params.line2, { affects: { line2: [1, 1, 0, 0] } }),
+      }),
+      {
+        line2: [-100, 0, 100, 0],
+      },
+    );
+    g9.align("center", "center").insertInto(host as any);
+
+    const lineEl = ((g9 as any).elements.l2 as any).el as FakeElement;
+    const eventAt = (clientX: number, clientY: number) => ({
+      clientX,
+      clientY,
+      cancelable: true,
+      stopPropagation: () => {},
+      preventDefault: () => {},
+    });
+
+    lineEl.dispatch("mousedown", eventAt(400, 300));
+    const pullMarker = (g9 as any)._debugPullEl as FakeElement | null;
+    const targetMarker = (g9 as any)._debugTargetEl as FakeElement | null;
+    assert(!!pullMarker && !!targetMarker, "expected debug markers to be created");
+    assert(
+      pullMarker.style.display !== "none" && targetMarker.style.display !== "none",
+      "expected debug markers to be visible while dragging",
+    );
+
+    dispatchDocumentEvent("mousemove", eventAt(460, 300));
+    dispatchDocumentEvent("mouseup", eventAt(460, 300));
+    assert(
+      pullMarker.style.display === "none" && targetMarker.style.display === "none",
+      "expected debug markers to hide after drag end",
+    );
+  } finally {
+    setG9DragDebugEnabled(prevDebug);
+  }
 });
 
 run("line drag end does not snap back to drag start", () => {
@@ -747,11 +861,34 @@ run("dragon render survives optimization path", () => {
     const delta = coords.from.sub(target);
     return delta.ref.mul(delta).sum();
   };
-
-  minimize(params, renderFn, lossFn, [100, 50], null, 3);
-  assert(toList(params[0].value).every(Number.isFinite), "dragon fromPt should remain finite");
-  assert(toList(params[1].value).every(Number.isFinite), "dragon toPt should remain finite");
-  assert(toList(params[2].value).every(Number.isFinite), "dragon squareness should remain finite");
+  const target: [number, number] = [100, 50];
+  const initialFrom: [number, number] = [175, 96];
+  const initialLoss = (initialFrom[0] - target[0]) ** 2 + (initialFrom[1] - target[1]) ** 2;
+  minimize(params, renderFn, lossFn, target, null, 3);
+  const fromAfter = toList(params[0].value);
+  const toAfter = toList(params[1].value);
+  const squarenessAfter = toList(params[2].value);
+  const finalLoss = (fromAfter[0] - target[0]) ** 2 + (fromAfter[1] - target[1]) ** 2;
+  assert(fromAfter.every(Number.isFinite), "dragon fromPt should remain finite");
+  assert(toAfter.every(Number.isFinite), "dragon toPt should remain finite");
+  assert(squarenessAfter.every(Number.isFinite), "dragon squareness should remain finite");
+  assert(finalLoss < initialLoss, `dragon start point should move toward target, loss ${initialLoss} -> ${finalLoss}`);
+  const runDragonWithIter = (iter: number) => {
+    const runParams: ParamState[] = [
+      { name: "fromPt", value: np.array([175, 96], { dtype: np.float32 }) },
+      { name: "toPt", value: np.array([-175, 39], { dtype: np.float32 }) },
+      { name: "squareness", value: np.array([0.8], { dtype: np.float32 }) },
+    ];
+    minimize(runParams, renderFn, lossFn, target, null, iter);
+    const runFrom = toList(runParams[0].value);
+    return (runFrom[0] - target[0]) ** 2 + (runFrom[1] - target[1]) ** 2;
+  };
+  const dragonLossIter1 = runDragonWithIter(1);
+  const dragonLossIter6 = runDragonWithIter(6);
+  assert(
+    dragonLossIter6 < dragonLossIter1,
+    `dragon should improve with more iterations, loss ${dragonLossIter1} -> ${dragonLossIter6}`,
+  );
 });
 
 run("tree render survives optimization path", () => {

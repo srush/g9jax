@@ -311,6 +311,7 @@ async function main() {
 
   bindRunButtons();
   bindDemoLossRows();
+  setG9DragDebugEnabled(true);
   bindDebugControls();
   moveDemoSection("section-tongs", "section-blocker");
 

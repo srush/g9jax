@@ -1,7 +1,7 @@
 {
   "name": "g9-jaxjs",
   "version": "1.0.0",
-  "description": "g9-style automatically interactive graphics using jax-js and forward-mode differentiation",
+  "description": "g9-style automatically interactive graphics using jax-js and reverse-mode differentiation",
   "type": "module",
   "scripts": {
     "dev": "vite",
