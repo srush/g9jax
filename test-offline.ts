@@ -556,6 +556,35 @@ run("constrained line supports negative projection drag", () => {
   assert(line3[0] < -100, "line3 x1 should move left for negative projection drag");
 });
 
+run("constrained line responds to horizontal drag in one move event", () => {
+  const { host, dispatchDocumentEvent } = installInteractiveFakeDom();
+  const g9 = new G9(
+    (params: Record<string, any>) => ({
+      l2: line(params.line2, { affects: { line2: [1, 1, 0, 0] } }),
+    }),
+    {
+      line2: [-100, 0, 100, 0],
+    },
+  );
+  g9.align("center", "center").insertInto(host as any);
+
+  const lineEl = ((g9 as any).elements.l2 as any).el as FakeElement;
+  const eventAt = (clientX: number, clientY: number) => ({
+    clientX,
+    clientY,
+    cancelable: true,
+    stopPropagation: () => {},
+    preventDefault: () => {},
+  });
+
+  lineEl.dispatch("mousedown", eventAt(400, 300));
+  dispatchDocumentEvent("mousemove", eventAt(520, 300));
+  dispatchDocumentEvent("mouseup", eventAt(520, 300));
+
+  const line2 = toList((g9 as any).params[0].value);
+  assert(line2[0] > 20, `x1 should move right after single horizontal drag event, got ${line2[0]}`);
+});
+
 run("line drag end does not snap back to drag start", () => {
   const { host, dispatchDocumentEvent } = installInteractiveFakeDom();
   const g9 = new G9(

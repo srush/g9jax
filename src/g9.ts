@@ -933,6 +933,10 @@ class LineEl {
     addDrag(this.el, (evt) => {
       this._cached.lastConverged = false;
       this._cached.lastHitLimit = false;
+      const affectsRaw = this.args.affects;
+      const dragAffects = affectsRaw && typeof affectsRaw === "object" && !Array.isArray(affectsRaw)
+        ? ("dragIter" in affectsRaw ? affectsRaw : { ...affectsRaw, dragIter: [24] })
+        : { dragIter: [24] };
       const c = this._cachedCoords.slice();
       const off = g9.getOffset();
       const cx = evt.clientX - off.left;
@@ -948,7 +952,7 @@ class LineEl {
         drag: (dx, dy) => {
           latestPullX = cx + dx;
           latestPullY = cy + dy;
-          this._cached = doMinimize(id, lossFn, [latestPullX, latestPullY, r], this.args.affects, false, this._cached);
+          this._cached = doMinimize(id, lossFn, [latestPullX, latestPullY, r], dragAffects, false, this._cached);
           const model = this._cachedCoords;
           const targetX = model[0] + (model[2] - model[0]) * r;
           const targetY = model[1] + (model[3] - model[1]) * r;
@@ -959,7 +963,7 @@ class LineEl {
           const ldx = c[2] - c[0], ldy = c[3] - c[1];
           const ll2 = ldx * ldx + ldy * ldy;
           const rr = ll2 > 0 ? ((latestPullX - c[0]) * ldx + (latestPullY - c[1]) * ldy) / ll2 : r;
-          this._cached = doMinimize(id, lossFn, [latestPullX, latestPullY, rr], this.args.affects, true, this._cached);
+          this._cached = doMinimize(id, lossFn, [latestPullX, latestPullY, rr], dragAffects, true, this._cached);
           this.g9.clearDragDebug();
         },
       };
