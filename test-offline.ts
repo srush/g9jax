@@ -787,6 +787,82 @@ run("secondary objectives are summed with main objective", () => {
   assert(xSecondary < xNoSecondary, `secondary penalty should reduce x magnitude (${xSecondary} < ${xNoSecondary})`);
 });
 
+run("blocker wall demo applies strong negative secondary inside wall", () => {
+  const ONE = np.array([1], { dtype: np.float32 });
+  const SHARP = np.array([0.35], { dtype: np.float32 });
+  const WALL_SECONDARY = np.array([-10000], { dtype: np.float32 });
+  const WALL_X0 = np.array([-20], { dtype: np.float32 });
+  const WALL_X1 = np.array([20], { dtype: np.float32 });
+  const WALL_Y0 = np.array([-130], { dtype: np.float32 });
+  const WALL_Y1 = np.array([130], { dtype: np.float32 });
+  const WALL_LEFT_SEG = np.array([-20, -130, -20, 130], { dtype: np.float32 });
+  const WALL_RIGHT_SEG = np.array([20, -130, 20, 130], { dtype: np.float32 });
+
+  const renderFn = (params: any) => {
+    const sigmoid = (x: any) => ONE.ref.div(ONE.ref.add(np.exp(x.neg())));
+    const insideBand = (value: any, minVal: any, maxVal: any) => {
+      const geMin = sigmoid(value.ref.sub(minVal.ref).mul(SHARP.ref));
+      const leMax = sigmoid(maxVal.ref.sub(value.ref).mul(SHARP.ref));
+      return geMin.ref.mul(leMax.ref);
+    };
+
+    const inWallX = insideBand(params.bx, WALL_X0, WALL_X1);
+    const inWallY = insideBand(params.by, WALL_Y0, WALL_Y1);
+    const inWall = inWallX.ref.mul(inWallY.ref);
+    const shapes: Record<string, any> = {
+      wallLeft: line(WALL_LEFT_SEG, {
+        stroke: "#111827",
+        "stroke-width": 16,
+        "stroke-linecap": "round",
+      }),
+      wallRight: line(WALL_RIGHT_SEG, {
+        stroke: "#111827",
+        "stroke-width": 16,
+        "stroke-linecap": "round",
+      }),
+      ball: point(np.concatenate([params.bx.ref, params.by.ref]), {
+        fill: "#f97316",
+        r: 8,
+        affects: { bx: true, by: true },
+      }),
+    };
+    return {
+      shapes,
+      secondary: {
+        wallBlock: inWall.ref.mul(WALL_SECONDARY.ref),
+      },
+    };
+  };
+
+  const outside = renderFn({
+    bx: np.array([-170], { dtype: np.float32 }),
+    by: np.array([0], { dtype: np.float32 }),
+  });
+  const inside = renderFn({
+    bx: np.array([0], { dtype: np.float32 }),
+    by: np.array([0], { dtype: np.float32 }),
+  });
+  const outsidePenalty = toList((outside as any).secondary.wallBlock)[0];
+  const insidePenalty = toList((inside as any).secondary.wallBlock)[0];
+  assert(insidePenalty < outsidePenalty - 9000, `inside wall penalty should be near -10000 (${insidePenalty} vs ${outsidePenalty})`);
+
+  const lossFn = (target: any, coords: any) => {
+    const d = coords.ball.sub(target);
+    return d.ref.mul(d).sum();
+  };
+  const params: ParamState[] = [
+    { name: "bx", value: np.array([-170], { dtype: np.float32 }) },
+    { name: "by", value: np.array([0], { dtype: np.float32 }) },
+  ];
+  let cached: any = undefined;
+  for (const target of [[-120, 0], [-80, 0], [-40, 0], [0, 0]]) {
+    cached = minimize(params, renderFn as any, lossFn as any, target, { bx: true, by: true }, 6, cached);
+  }
+  const bx = toList(params[0].value)[0];
+  const by = toList(params[1].value)[0];
+  assert(Number.isFinite(bx) && Number.isFinite(by), "blocker wall params should remain finite");
+});
+
 run("snake demo runs offline and supports repeated minimization", () => {
   const host = installFakeDom();
   const g9 = new G9(

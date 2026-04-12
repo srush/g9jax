@@ -14,10 +14,12 @@ function concatWithGradCompat(values: any[]): any {
   const anchor = values.find(isTracerLike);
   if (!anchor) return jaxNp.concatenate(values);
   const zero = anchor.ref.sum().mul(0);
+  const zeroRef = () => (zero && typeof zero === "object" && "ref" in zero ? (zero as any).ref : zero);
   const lifted = values.map((value) => {
     if (isTracerLike(value)) return value;
     if (value && typeof value === "object" && "ref" in value) {
-      return (value as any).ref.add(zero);
+      // `zero` is reused across elements, so take `.ref` each time.
+      return (value as any).ref.add(zeroRef());
     }
     return value;
   });

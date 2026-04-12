@@ -300,6 +300,7 @@ async function main() {
     ["section-rings", "#demo-rings"],
     ["section-classifier", "#demo-classifier"],
     ["section-lines", "#demo-lines"],
+    ["section-blocker", "#demo-blocker"],
     ["section-particles", "#demo-particles"],
     ["section-dragon", "#demo-dragon"],
     ["section-tree", "#demo-tree"],
