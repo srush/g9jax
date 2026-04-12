@@ -651,6 +651,7 @@ run("line drag debug markers are visible during drag and hidden on release", () 
     });
 
     lineEl.dispatch("mousedown", eventAt(400, 300));
+    dispatchDocumentEvent("mousemove", eventAt(460, 300));
     const pullMarker = (g9 as any)._debugPullEl as FakeElement | null;
     const targetMarker = (g9 as any)._debugTargetEl as FakeElement | null;
     assert(!!pullMarker && !!targetMarker, "expected debug markers to be created");
@@ -659,7 +660,6 @@ run("line drag debug markers are visible during drag and hidden on release", () 
       "expected debug markers to be visible while dragging",
     );
 
-    dispatchDocumentEvent("mousemove", eventAt(460, 300));
     dispatchDocumentEvent("mouseup", eventAt(460, 300));
     assert(
       pullMarker.style.display === "none" && targetMarker.style.display === "none",
@@ -702,6 +702,38 @@ run("line drag end does not snap back to drag start", () => {
 
   const line2 = toList((g9 as any).params[1].value);
   assert(Math.abs(line2[1]) > 10, `line2 y1 should stay displaced after mouseup, got ${line2[1]}`);
+});
+
+run("line click without movement does not move constrained line", () => {
+  const { host, dispatchDocumentEvent } = installInteractiveFakeDom();
+  const g9 = new G9(
+    (params: Record<string, any>) => ({
+      l: line(params.line, { affects: { line: [1, 1, 0, 0] } }),
+    }),
+    { line: [-140, 0, 140, 0] },
+  );
+  g9.align("center", "center").insertInto(host as any);
+
+  const lineEl = ((g9 as any).elements.l as any).el as FakeElement;
+  const eventAt = (clientX: number, clientY: number) => ({
+    clientX,
+    clientY,
+    cancelable: true,
+    stopPropagation: () => {},
+    preventDefault: () => {},
+  });
+
+  const before = toList((g9 as any).params[0].value.ref);
+  // Click and hold without moving; should not trigger any solve.
+  lineEl.dispatch("mousedown", eventAt(400, 300));
+  dispatchDocumentEvent("mouseup", eventAt(400, 300));
+  const after = toList((g9 as any).params[0].value.ref);
+
+  const drift = after.map((v, i) => Math.abs(v - before[i]));
+  assert(
+    drift.every((d) => d < 1e-6),
+    `line should remain unchanged on click-without-move, got drift ${drift.join(",")}`,
+  );
 });
 
 run("run policy forces remount for lines demo", () => {

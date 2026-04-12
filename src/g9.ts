@@ -1009,6 +1009,7 @@ function addDrag(
     const sx = f.clientX, sy = f.clientY;
     let latestDx = 0;
     let latestDy = 0;
+    let hasMoved = false;
     let rafId = 0;
 
     const tick = () => {
@@ -1016,9 +1017,7 @@ function addDrag(
       onDrag(latestDx, latestDy);
       rafId = scheduleFrame(tick);
     };
-    // Immediate first solve gives instant visual feedback on touch-down.
-    onDrag(0, 0);
-    rafId = scheduleFrame(tick);
+    // Avoid solving on click-without-move; start loop after first movement.
 
     function move(ev: MouseEvent | TouchEvent) {
       ev.stopPropagation();
@@ -1026,6 +1025,11 @@ function addDrag(
       const m = firstPointer(ev);
       latestDx = m.clientX - sx;
       latestDy = m.clientY - sy;
+      if (!hasMoved && (Math.abs(latestDx) > 0.25 || Math.abs(latestDy) > 0.25)) {
+        hasMoved = true;
+        onDrag(latestDx, latestDy);
+        rafId = scheduleFrame(tick);
+      }
     }
     function end(ev: MouseEvent | TouchEvent) {
       ev.stopPropagation();
@@ -1034,14 +1038,16 @@ function addDrag(
         cancelFrame(rafId);
         rafId = 0;
       }
-      onDrag(latestDx, latestDy);
+      if (hasMoved) {
+        onDrag(latestDx, latestDy);
+        session.end?.();
+      }
       document.removeEventListener("mousemove", move);
       document.removeEventListener("touchmove", move);
       document.removeEventListener("mouseup", end);
       document.removeEventListener("touchend", end);
       document.removeEventListener("touchcancel", end);
       el.classList.remove("g9-active-drag");
-      session.end?.();
       endGlobalDrag();
     }
     document.addEventListener("mousemove", move);
