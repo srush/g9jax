@@ -1,5 +1,7 @@
 # g9-jaxjs
 
+Check it out at [g9-jaxjs](https://srush.github.io/g9jax/)
+
 **Automatically interactive graphics** using [jax-js](https://github.com/ekzhang/jax-js) forward-mode differentiation.
 
 Inspired by [g9.js](https://omrelli.ug/g9/). Instead of
