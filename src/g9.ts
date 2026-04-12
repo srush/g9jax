@@ -1160,8 +1160,15 @@ export class G9 {
   }
 
   getOffset(): { top: number; left: number } {
-    const r = this._rect || { top: 0, left: 0 };
-    return { top: r.top + this.yOff, left: r.left + this.xOff };
+    const cachedRect = this._rect || { top: 0, left: 0 };
+    const liveRect = this.parent?.getBoundingClientRect?.() ?? null;
+    const activeRect = liveRect || cachedRect;
+    if (liveRect) {
+      this._rect = liveRect;
+      this.xOff = this.xAlign === "left" ? 0 : this.xAlign === "center" ? liveRect.width / 2 : liveRect.width;
+      this.yOff = this.yAlign === "top" ? 0 : this.yAlign === "center" ? liveRect.height / 2 : liveRect.height;
+    }
+    return { top: activeRect.top + this.yOff, left: activeRect.left + this.xOff };
   }
 
   align(x = "center", y = "center"): this {
