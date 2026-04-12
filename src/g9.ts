@@ -34,7 +34,12 @@ const np: typeof jaxNp = new Proxy(jaxNp as any, {
   },
 }) as typeof jaxNp;
 
-type ShapeArgs = { type: "point" | "line"; c: any } & Record<string, any>;
+type ShapeOptions = {
+  dragIter?: number | number[];
+  regWeight?: number | number[];
+};
+
+type ShapeArgs = { type: "point" | "line"; c: any; opt?: ShapeOptions } & Record<string, any>;
 type RenderShapeMap = Record<string, ShapeArgs>;
 type SecondaryScores = Record<string, any>;
 type RenderOutput = RenderShapeMap | {
@@ -47,16 +52,7 @@ type RenderFn = (
   params: Record<string, any>,
 ) => RenderOutput;
 
-type AffectOptions = {
-  dragIter?: number | number[];
-  regWeight?: number | number[];
-};
-
-type AffectsConfig = Record<string, any> & {
-  opt?: AffectOptions;
-  dragIter?: number | number[]; // legacy support
-  regWeight?: number | number[]; // legacy support
-};
+type AffectsConfig = Record<string, any>;
 
 type RuntimeStats = {
   minimizeCalls: number;
@@ -340,11 +336,11 @@ function stripAffectOptions(
   affects: Record<string, any> | null | undefined,
 ): Record<string, any> | null | undefined {
   if (!affects || typeof affects !== "object" || Array.isArray(affects)) return affects;
-  const hasOptKey = Object.prototype.hasOwnProperty.call(affects, "opt");
   const hasLegacyDragIterKey = Object.prototype.hasOwnProperty.call(affects, "dragIter");
-  const affectEntries = Object.entries(affects).filter(([key]) => key !== "opt" && key !== "dragIter");
+  const hasLegacyRegWeightKey = Object.prototype.hasOwnProperty.call(affects, "regWeight");
+  const affectEntries = Object.entries(affects).filter(([key]) => key !== "dragIter" && key !== "regWeight");
   if (affectEntries.length > 0) return Object.fromEntries(affectEntries);
-  if (hasOptKey || hasLegacyDragIterKey) return null;
+  if (hasLegacyDragIterKey || hasLegacyRegWeightKey) return null;
   return affects;
 }
 
@@ -422,17 +418,8 @@ type CachedJit = {
 type MinimizeRegularizer = {
   anchor: ArrayLike<number> | null;
   weight: number;
+  stepWeight?: number;
 };
-
-function parseOptNumber(
-  optValue: number | number[] | undefined,
-  legacyValue: number | number[] | undefined,
-): number {
-  const source = optValue ?? legacyValue;
-  if (source == null) return NaN;
-  const value = Array.isArray(source) ? Number(source[0]) : Number(source);
-  return Number.isFinite(value) ? value : NaN;
-}
 
 export function minimize(
   params: ParamState[],
@@ -606,6 +593,9 @@ export function minimize(
   const regularizerWeight = Number.isFinite(regularizer?.weight)
     ? Math.max(0, Number(regularizer?.weight))
     : 0;
+  const stepRegularizerWeight = Number.isFinite(regularizer?.stepWeight)
+    ? Math.max(0, Number(regularizer?.stepWeight))
+    : 0;
   const regularizerAnchor = regularizer?.anchor && regularizer.anchor.length === dim
     ? regularizer.anchor
     : null;
@@ -663,8 +653,9 @@ export function minimize(
       const f0 = evalLoss(jitLoss, tLen, x, combinedBuffer) + regularizeLoss(x);
       let descentDot = 0;
       let stepNorm2 = 0;
-      const maxBfgsCoordStep = 18.0;
-      const maxBfgsStepNorm = 24.0;
+      const stepTrustScale = Math.sqrt(1 + stepRegularizerWeight * 500);
+      const maxBfgsCoordStep = 18.0 / stepTrustScale;
+      const maxBfgsStepNorm = 24.0 / stepTrustScale;
       for (let i = 0; i < dim; i++) {
         const row = i * dim;
         let projected = 0;
@@ -708,7 +699,8 @@ export function minimize(
         }
       }
 
-      let alpha = Math.min(1.0, 8.0 / (Math.sqrt(stepNorm2) + 1e-6));
+      const alphaNormCap = 8.0 / stepTrustScale;
+      let alpha = Math.min(1.0, alphaNormCap / (Math.sqrt(stepNorm2) + 1e-6));
       let fillAlpha = alpha;
       for (let ls = 0; ls < LINE_SEARCH_TRIALS; ls++) {
         const row = ls * totalLen + tLen;
@@ -733,8 +725,17 @@ export function minimize(
         }
         return regularizerWeight * total;
       };
+      const regularizeStepLoss = (trialAlpha: number): number => {
+        if (stepRegularizerWeight <= 0) return 0;
+        let total = 0;
+        for (let i = 0; i < dim; i++) {
+          const stepDelta = trialAlpha * bfgsStep[i];
+          total += stepDelta * stepDelta;
+        }
+        return stepRegularizerWeight * total;
+      };
       for (let ls = 0; ls < LINE_SEARCH_TRIALS; ls++) {
-        const fTrial = batchedTrialLosses[ls] + regularizeTrialLoss(acceptedAlpha);
+        const fTrial = batchedTrialLosses[ls] + regularizeTrialLoss(acceptedAlpha) + regularizeStepLoss(acceptedAlpha);
         if (Number.isFinite(fTrial) && fTrial <= f0 + 1e-4 * acceptedAlpha * descentDot) {
           for (let i = 0; i < dim; i++) x[i] = x0Buffer[i] + acceptedAlpha * bfgsStep[i];
           accepted = true;
@@ -746,7 +747,8 @@ export function minimize(
       if (!accepted) {
         bfgsH.fill(0);
         for (let i = 0; i < dim; i++) bfgsH[i * dim + i] = 1;
-        const fallbackStep = Math.min(0.12, 2.0 / (Math.sqrt(gnorm2) + 1e-6));
+        const fallbackStepBase = Math.min(0.12, 2.0 / (Math.sqrt(gnorm2) + 1e-6));
+        const fallbackStep = fallbackStepBase / stepTrustScale;
         for (let i = 0; i < dim; i++) x[i] = x0Buffer[i] - fallbackStep * gBuffer[i];
         continue;
       }
@@ -800,9 +802,10 @@ export function minimize(
       continue;
     }
 
-    const lr = Math.min(0.35, 8.0 / (gmax + 1e-6));
+    const stepTrustScale = Math.sqrt(1 + stepRegularizerWeight * 500);
+    const lr = Math.min(0.35, 8.0 / ((gmax + 1e-6) * stepTrustScale));
     const momentum = 0.7;
-    const maxStep = 18.0;
+    const maxStep = 18.0 / stepTrustScale;
     for (let i = 0; i < dim; i++) {
       const v = momentum * velocityBuffer[i] - lr * gBuffer[i];
       velocityBuffer[i] = v;
@@ -871,6 +874,7 @@ class PointEl {
       affects: Record<string, any> | null | undefined,
       forceRender: boolean,
       cached?: CachedJit,
+      opt?: ShapeOptions | null | undefined,
     ) => CachedJit,
     g9: G9,
   ): void {
@@ -889,6 +893,8 @@ class PointEl {
     this._cached = g9._warmup(lossFn, [0, 0]);
 
     addDrag(this.el, (_evt) => {
+      // Reset drag-start anchor per gesture so regularization is local to this drag.
+      this._cached.dragStartX = null;
       this._cached.lastConverged = false;
       this._cached.lastHitLimit = false;
       const c0 = this._cachedCoords.slice();
@@ -896,13 +902,29 @@ class PointEl {
         drag: (dx, dy) => {
           const pullX = c0[0] + dx;
           const pullY = c0[1] + dy;
-          this._cached = doMinimize(id, lossFn, [pullX, pullY], this.args.affects, false, this._cached);
+          this._cached = doMinimize(
+            id,
+            lossFn,
+            [pullX, pullY],
+            this.args.affects,
+            false,
+            this._cached,
+            this.args.opt,
+          );
           const model = this._cachedCoords;
           this.g9.setDragDebug([pullX, pullY], [model[0], model[1]]);
         },
         end: () => {
           const c = this._cachedCoords;
-          this._cached = doMinimize(id, lossFn, [c[0], c[1]], this.args.affects, true, this._cached);
+          this._cached = doMinimize(
+            id,
+            lossFn,
+            [c[0], c[1]],
+            this.args.affects,
+            true,
+            this._cached,
+            this.args.opt,
+          );
           this.g9.clearDragDebug();
         },
       };
@@ -947,6 +969,7 @@ class LineEl {
       affects: Record<string, any> | null | undefined,
       forceRender: boolean,
       cached?: CachedJit,
+      opt?: ShapeOptions | null | undefined,
     ) => CachedJit,
     g9: G9,
   ): void {
@@ -972,20 +995,20 @@ class LineEl {
     this._cached = g9._warmup(lossFn, [0, 0, 0]);
 
     addDrag(this.el, (evt) => {
+      // Reset drag-start anchor per gesture so regularization is local to this drag.
+      this._cached.dragStartX = null;
       this._cached.lastConverged = false;
       this._cached.lastHitLimit = false;
       const affectsRaw = this.args.affects as AffectsConfig | undefined;
-      const dragAffects: AffectsConfig = affectsRaw && typeof affectsRaw === "object" && !Array.isArray(affectsRaw)
-        ? {
-          ...affectsRaw,
-          opt: {
-            ...(affectsRaw.opt && typeof affectsRaw.opt === "object" ? affectsRaw.opt : {}),
-            dragIter: (affectsRaw.opt && typeof affectsRaw.opt === "object" && "dragIter" in affectsRaw.opt)
-              ? affectsRaw.opt.dragIter
-              : ("dragIter" in affectsRaw ? affectsRaw.dragIter : [24]),
-          },
-        }
-        : { opt: { dragIter: [24] } };
+      const optRaw = this.args.opt && typeof this.args.opt === "object"
+        ? this.args.opt as ShapeOptions
+        : {};
+      const dragOpt: ShapeOptions = {
+        ...optRaw,
+      };
+      if (dragOpt.dragIter == null) {
+        dragOpt.dragIter = [24];
+      }
       const c = this._cachedCoords.slice();
       const off = g9.getOffset();
       const cx = evt.clientX - off.left;
@@ -1001,7 +1024,7 @@ class LineEl {
         drag: (dx, dy) => {
           latestPullX = cx + dx;
           latestPullY = cy + dy;
-          this._cached = doMinimize(id, lossFn, [latestPullX, latestPullY, r], dragAffects, false, this._cached);
+          this._cached = doMinimize(id, lossFn, [latestPullX, latestPullY, r], affectsRaw, false, this._cached, dragOpt);
           const model = this._cachedCoords;
           const targetX = model[0] + (model[2] - model[0]) * r;
           const targetY = model[1] + (model[3] - model[1]) * r;
@@ -1012,7 +1035,7 @@ class LineEl {
           const ldx = c[2] - c[0], ldy = c[3] - c[1];
           const ll2 = ldx * ldx + ldy * ldy;
           const rr = ll2 > 0 ? ((latestPullX - c[0]) * ldx + (latestPullY - c[1]) * ldy) / ll2 : r;
-          this._cached = doMinimize(id, lossFn, [latestPullX, latestPullY, rr], dragAffects, true, this._cached);
+          this._cached = doMinimize(id, lossFn, [latestPullX, latestPullY, rr], affectsRaw, true, this._cached, dragOpt);
           this.g9.clearDragDebug();
         },
       };
@@ -1068,8 +1091,16 @@ function addDrag(
     }
   };
 
-  function firstPointer(event: MouseEvent | TouchEvent): MouseEvent | Touch {
-    return "touches" in event ? event.touches[0] : event;
+  function firstPointer(event: MouseEvent | TouchEvent): MouseEvent | Touch | null {
+    if ("touches" in event) {
+      const primaryTouch = event.touches && event.touches.length > 0
+        ? event.touches[0]
+        : event.changedTouches && event.changedTouches.length > 0
+          ? event.changedTouches[0]
+          : null;
+      return primaryTouch ?? null;
+    }
+    return event;
   }
 
   function start(e: MouseEvent | TouchEvent) {
@@ -1078,6 +1109,11 @@ function addDrag(
     beginGlobalDrag();
     el.classList.add("g9-active-drag");
     const f = firstPointer(e);
+    if (!f) {
+      el.classList.remove("g9-active-drag");
+      endGlobalDrag();
+      return;
+    }
     let session: DragSession;
     try {
       session = onStartCb(f);
@@ -1105,6 +1141,7 @@ function addDrag(
       ev.stopPropagation();
       if (ev.cancelable) ev.preventDefault();
       const m = firstPointer(ev);
+      if (!m) return;
       latestDx = m.clientX - sx;
       latestDy = m.clientY - sy;
       if (!hasMoved && (Math.abs(latestDx) > 0.25 || Math.abs(latestDy) > 0.25)) {
@@ -1385,18 +1422,14 @@ export class G9 {
     affects: Record<string, any> | null | undefined,
     forceRender = false,
     cached?: CachedJit,
+    opt?: ShapeOptions | null | undefined,
   ): CachedJit {
-    const affectsObj: AffectsConfig = (affects && typeof affects === "object" && !Array.isArray(affects))
-      ? affects as AffectsConfig
-      : {};
-    const hasLegacyDragIterKey = Object.prototype.hasOwnProperty.call(affectsObj, "dragIter");
-    const hasLegacyRegWeightKey = Object.prototype.hasOwnProperty.call(affectsObj, "regWeight");
-    const optObj = affectsObj.opt && typeof affectsObj.opt === "object"
-      ? affectsObj.opt
+    const optObj = opt && typeof opt === "object"
+      ? opt
       : null;
     const dragIterRaw = optObj && Object.prototype.hasOwnProperty.call(optObj, "dragIter")
       ? optObj.dragIter
-      : (hasLegacyDragIterKey ? affectsObj.dragIter : null);
+      : null;
     const dragIterOverride = dragIterRaw == null
       ? NaN
       : Array.isArray(dragIterRaw)
@@ -1404,7 +1437,7 @@ export class G9 {
         : Number(dragIterRaw);
     const regWeightRaw = optObj && Object.prototype.hasOwnProperty.call(optObj, "regWeight")
       ? optObj.regWeight
-      : (hasLegacyRegWeightKey ? affectsObj.regWeight : null);
+      : null;
     const regWeightOverride = regWeightRaw == null
       ? NaN
       : Array.isArray(regWeightRaw)
@@ -1430,6 +1463,7 @@ export class G9 {
     const regularizer = {
       anchor: dragStartX,
       weight: effectiveRegWeight,
+      stepWeight: effectiveRegWeight,
     };
     const c = minimize(this.params, this.renderFn, lossFn, target, affectsForGrad, dragIterations, cached, regularizer);
     emitOptimizeLoss(this.containerId, c.lastLoss);

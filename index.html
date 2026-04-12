@@ -410,14 +410,16 @@ return new G9((params) => {
       stroke: "#111827",
       "stroke-width": 8,
       "stroke-linecap": "round",
-      affects: {ax: true, ay: true, opt: {dragIter: [14]}},
+      affects: {ax: true, ay: true},
+      opt: {dragIter: [14]},
     });
   });
   BASE.forEach((_unused, i) => {
     shapes["p" + i] = point(projectAt(i), {
       fill: "#0ea5e9",
       r: 4,
-      affects: {ax: true, ay: true, opt: {dragIter: [14]}},
+      affects: {ax: true, ay: true},
+      opt: {dragIter: [14]},
     });
   });
   return shapes;
@@ -635,12 +637,14 @@ return new G9((params) => ({
   }),
   startOnly: line(params.startOnly, {
     stroke: "#e11d48",
-    affects: {startOnly: [1,1,0,0], opt: {dragIter: [24]}},
+    affects: {startOnly: [1,1,0,0]},
+    opt: {dragIter: [24]},
     ...opts
   }),
   endOnly: line(params.endOnly, {
     stroke: "#2563eb",
-    affects: {endOnly: [0,0,1,1], opt: {dragIter: [24]}},
+    affects: {endOnly: [0,0,1,1]},
+    opt: {dragIter: [24]},
     ...opts
   }),
 }), {
@@ -731,7 +735,8 @@ return new G9((params) => {
       <div class="demo-code" data-target="#demo-dragon">
         <textarea>const ROT = np.array([[0,1],[-1,0]], {dtype: np.float32});
 const lineOpts = {"stroke-width": 3, "stroke-linecap": "round",
-  affects: {squareness: true, opt: {dragIter: [12], regWeight: [0.002]}}};
+  affects: {squareness: true},
+  opt: {dragIter: [12], regWeight: [0.002]}};
 
 return new G9((params) => {
   const pts = {};
@@ -900,8 +905,9 @@ return new G9((params) => {
   for (let i = 0; i < 4; i++) {
     const dir = i % 2 === 0 ? -1 : 1;
     const localAffects = i < 3
-      ? {b: true, opt: {dragIter: [1]}}
-      : {a: true, opt: {dragIter: [1]}};
+      ? {b: true}
+      : {a: true};
+    const localOpt = {dragIter: [1]};
     const nx = x.ref.add(np.cos(params.b.ref).mul(SEGMENT));
     const nyTop = yTop.ref.add(np.sin(params.b.ref).mul(SEGMENT * dir));
     const nyBottom = yBottom.ref.sub(np.sin(params.b.ref).mul(SEGMENT * dir));
@@ -916,15 +922,17 @@ return new G9((params) => {
       "stroke-width": 8,
       "stroke-linecap": "round",
       affects: localAffects,
+      opt: localOpt,
     });
     pts["l" + i] = line(np.concatenate([b0.ref, b1.ref]), {
       stroke: "#111827",
       "stroke-width": 8,
       "stroke-linecap": "round",
       affects: localAffects,
+      opt: localOpt,
     });
-    pts["up" + i] = point(a1.ref, {fill: "#0ea5e9", r: 4, affects: localAffects});
-    pts["lp" + i] = point(b1.ref, {fill: "#0ea5e9", r: 4, affects: localAffects});
+    pts["up" + i] = point(a1.ref, {fill: "#0ea5e9", r: 4, affects: localAffects, opt: localOpt});
+    pts["lp" + i] = point(b1.ref, {fill: "#0ea5e9", r: 4, affects: localAffects, opt: localOpt});
 
     x = nx;
     yTop = nyTop;
