@@ -329,33 +329,42 @@ run("basic example survives repeated G9 minimize/render cycles", () => {
 });
 
 run("rings example render path works exactly as in main.ts", () => {
-  const SIDES = 8;
-  const angleOffsets: number[] = [];
-  for (let i = 0; i < SIDES; i++) angleOffsets.push((i / SIDES) * Math.PI * 2);
+  const LEVELS = 5;
+  const PER_LEVEL = 20;
+  const TOTAL = LEVELS * PER_LEVEL;
+  const OFFSET_VALUES = Array.from({ length: TOTAL }, (_unused, i) => (i / PER_LEVEL) * Math.PI * 2);
+  const LEVEL_IDS = Array.from({ length: TOTAL }, (_unused, i) => Math.floor(i / PER_LEVEL));
+  const BASE_RADII = [1.0, 0.84, 0.68, 0.52, 0.36];
 
   const radius = np.array([120], { dtype: np.float32 });
   const angle = np.array([0], { dtype: np.float32 });
   const render = (params: { radius: any; angle: any }) => {
     const pts: Record<string, any> = {};
-    for (let i = 0; i < SIDES; i++) {
-      const offset = np.array([angleOffsets[i]], { dtype: np.float32 });
+    for (let i = 0; i < TOTAL; i++) {
+      const offset = np.array([OFFSET_VALUES[i]], { dtype: np.float32 });
       const a = params.angle.ref.add(offset);
-      const ox = np.cos(a.ref).mul(params.radius.ref);
-      const oy = np.sin(a.ref).mul(params.radius.ref);
-      pts[`out${i}`] = point(np.concatenate([ox, oy]));
-      const negA = a.neg();
-      const halfR = params.radius.ref.div(2);
-      const ix = np.cos(negA.ref).mul(halfR.ref);
-      const iy = np.sin(negA).mul(halfR);
-      pts[`in${i}`] = point(np.concatenate([ix, iy]), { fill: "#e11d48" });
+      const baseScale = np.array([BASE_RADII[LEVEL_IDS[i]]], { dtype: np.float32 });
+      const levelRadius = params.radius.ref.mul(baseScale.ref);
+      const px = np.cos(a.ref).mul(levelRadius.ref);
+      const py = np.sin(a).mul(levelRadius);
+      const color = LEVEL_IDS[i] === 0
+        ? "#111827"
+        : LEVEL_IDS[i] === 1
+          ? "#2563eb"
+          : LEVEL_IDS[i] === 2
+            ? "#10b981"
+            : LEVEL_IDS[i] === 3
+              ? "#f59e0b"
+              : "#ef4444";
+      pts[`p${i}`] = point(np.concatenate([px, py]), { fill: color });
     }
     return pts;
   };
 
   const shapes = render({ radius: radius.ref, angle: angle.ref });
-  assert(Object.keys(shapes).length === 16, "rings example should render 16 points");
-  assert(toList(shapes.out0.c).length === 2, "rings outer point should be 2D");
-  assert(toList(shapes.in0.c).length === 2, "rings inner point should be 2D");
+  assert(Object.keys(shapes).length === TOTAL, `rings example should render ${TOTAL} points`);
+  assert(toList(shapes.p0.c).length === 2, "rings point should be 2D");
+  assert(toList(shapes.p99.c).length === 2, "rings final point should be 2D");
 });
 
 run("line drag loss minimizes", () => {

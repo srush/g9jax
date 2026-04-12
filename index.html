@@ -324,47 +324,46 @@ return new G9((params) => {
       </div>
       <div class="demo-canvas" id="demo-rings"></div>
       <div class="demo-code" data-target="#demo-rings">
-        <textarea>const SIDES = 8;
-const offsets = [];
-for (let i = 0; i < SIDES; i++)
-  offsets.push((i / SIDES) * Math.PI * 2);
-const OFFSETS = np.array(offsets, {dtype: np.float32});
+        <textarea>const LEVELS = 5;
+const PER_LEVEL = 20;
+const TOTAL = LEVELS * PER_LEVEL;
+const LEVEL_SCALE = np.array([1.0, 0.84, 0.68, 0.52, 0.36], {dtype: np.float32});
+const LEVEL_COLORS = ["#111827", "#1d4ed8", "#0ea5e9", "#22c55e", "#f97316"];
+const OFFSETS = np.array(
+  Array.from({length: PER_LEVEL}, (_, i) => (i / PER_LEVEL) * Math.PI * 2),
+  {dtype: np.float32},
+);
 
-const outerPt = (offset, angle, radius) => {
+const ringPt = (offset, angle, radius, scale) => {
   const a = angle.add(offset);
-  return np.concatenate([
-    np.cos(a.ref).mul(radius.ref),
-    np.sin(a).mul(radius)]);
+  const r = radius.ref.mul(scale.ref);
+  return np.concatenate([np.cos(a.ref).mul(r.ref), np.sin(a).mul(r)]);
 };
-const innerPt = (offset, angle, radius) => {
-  const a = angle.add(offset).neg();
-  return np.concatenate([
-    np.cos(a.ref).mul(radius.ref),
-    np.sin(a).mul(radius)]);
-};
-const vmapOuter = vmap(outerPt, [0, null, null]);
-const vmapInner = vmap(innerPt, [0, null, null]);
+const vmapRing = vmap(ringPt, [0, null, null, null]);
 
 return new G9((params) => {
-  const outerFlat = vmapOuter(
-    OFFSETS.ref, params.angle.ref, params.radius.ref
-  ).reshape([SIDES * 2]);
-  const halfR = params.radius.div(2);
-  const innerFlat = vmapInner(
-    OFFSETS.ref, params.angle, halfR
-  ).reshape([SIDES * 2]);
+  const rings = Array.from({length: LEVELS}, (_, level) => {
+    const scale = LEVEL_SCALE.ref.slice([level, level + 1]);
+    return vmapRing(OFFSETS.ref, params.angle.ref, params.radius.ref, scale).reshape([PER_LEVEL * 2]);
+  });
+
   const pts = {};
-  for (let i = 0; i < SIDES; i++) {
-    const lo = i === SIDES-1;
-    pts["out"+i] = point(
-      (lo ? outerFlat : outerFlat.ref).slice([i*2, i*2+2]));
-    const li = i === SIDES-1;
-    pts["in"+i] = point(
-      (li ? innerFlat : innerFlat.ref).slice([i*2, i*2+2]),
-      {fill: "#e11d48"});
-  }
+  Array.from({length: TOTAL}, (_, index) => {
+    const level = Math.floor(index / PER_LEVEL);
+    const local = index % PER_LEVEL;
+    const ring = rings[level];
+    const start = local * 2;
+    const coords = local === PER_LEVEL - 1
+      ? ring.slice([start, start + 2])
+      : ring.ref.slice([start, start + 2]);
+    pts["pt" + index] = point(coords, {
+      fill: LEVEL_COLORS[level],
+      r: level === 0 ? 4 : 3,
+    });
+    return null;
+  });
   return pts;
-}, { radius: [120], angle: [0] });</textarea>
+}, { radius: [125], angle: [0] });</textarea>
         <button class="run-btn">Run ▶</button>
         <div class="error-msg"></div>
       </div>
