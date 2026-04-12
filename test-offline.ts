@@ -736,6 +736,26 @@ run("line click without movement does not move constrained line", () => {
   );
 });
 
+run("getOffset tracks live parent rect after mount", () => {
+  const host = installFakeDom();
+  let top = 100;
+  host.getBoundingClientRect = () => ({ top, left: 30, width: 800, height: 600 });
+  const g9 = new G9(
+    (params: Record<string, any>) => ({ p: point(params.xy) }),
+    { xy: [0, 0] },
+  );
+  g9.align("center", "center").insertInto(host as any);
+
+  const initial = g9.getOffset();
+  assert(Math.abs(initial.top - 400) < 1e-6, `expected initial top=400, got ${initial.top}`);
+  assert(Math.abs(initial.left - 430) < 1e-6, `expected initial left=430, got ${initial.left}`);
+
+  top = 20;
+  const shifted = g9.getOffset();
+  assert(Math.abs(shifted.top - 320) < 1e-6, `expected shifted top=320, got ${shifted.top}`);
+  assert(Math.abs(shifted.left - 430) < 1e-6, `expected shifted left=430, got ${shifted.left}`);
+});
+
 run("run policy forces remount for lines demo", () => {
   assert(
     shouldReuseMountedDemo("#demo-points", true, "a", "a", false),
@@ -920,6 +940,132 @@ run("dragon render survives optimization path", () => {
   assert(
     dragonLossIter6 < dragonLossIter1,
     `dragon should improve with more iterations, loss ${dragonLossIter1} -> ${dragonLossIter6}`,
+  );
+});
+
+run("dragon line drag converges better with higher dragIter", () => {
+  class LocalFakeElement {
+    style: Record<string, string> = {};
+    children: LocalFakeElement[] = [];
+    textContent = "";
+    attrs: Record<string, string> = {};
+    listeners: Record<string, Array<(event: any) => void>> = {};
+    classList = {
+      add: () => {},
+      remove: () => {},
+      contains: () => false,
+    };
+    appendChild(child: LocalFakeElement): LocalFakeElement { this.children.push(child); return child; }
+    removeChild(child: LocalFakeElement): LocalFakeElement {
+      const i = this.children.indexOf(child);
+      if (i >= 0) this.children.splice(i, 1);
+      return child;
+    }
+    setAttributeNS(_ns: string | null, key: string, value: string): void { this.attrs[key] = value; }
+    setAttribute(key: string, value: string): void { this.attrs[key] = value; }
+    addEventListener(type: string, handler: (event: any) => void): void {
+      (this.listeners[type] ??= []).push(handler);
+    }
+    removeEventListener(type: string, handler: (event: any) => void): void {
+      const list = this.listeners[type];
+      if (!list) return;
+      const idx = list.indexOf(handler);
+      if (idx >= 0) list.splice(idx, 1);
+    }
+    dispatch(type: string, event: any): void {
+      for (const handler of this.listeners[type] ?? []) handler(event);
+    }
+    getBoundingClientRect() { return { top: 0, left: 0, width: 800, height: 600 }; }
+  }
+
+  const runWithDragIter = (dragIter: number): number => {
+    const host = new LocalFakeElement();
+    const documentListeners = new Map<string, Array<(event: any) => void>>();
+    const addDocumentListener = (type: string, handler: (event: any) => void) => {
+      const list = documentListeners.get(type) ?? [];
+      list.push(handler);
+      documentListeners.set(type, list);
+    };
+    const removeDocumentListener = (type: string, handler: (event: any) => void) => {
+      const list = documentListeners.get(type);
+      if (!list) return;
+      const idx = list.indexOf(handler);
+      if (idx >= 0) list.splice(idx, 1);
+    };
+    const dispatchDocumentEvent = (type: string, event: any) => {
+      for (const handler of documentListeners.get(type) ?? []) handler(event);
+    };
+    (globalThis as any).document = {
+      createElementNS: () => new LocalFakeElement(),
+      querySelector: () => host,
+      addEventListener: addDocumentListener,
+      removeEventListener: removeDocumentListener,
+      getElementById: () => null,
+      documentElement: { classList: { add: () => {}, remove: () => {}, contains: () => false } },
+    };
+    (globalThis as any).window = {
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      requestAnimationFrame: () => 1,
+      cancelAnimationFrame: () => {},
+      setInterval: () => 0,
+      clearInterval: () => {},
+      matchMedia: () => ({ matches: false }),
+    };
+
+    const ROT = np.array([[0, 1], [-1, 0]], { dtype: np.float32 });
+    const g9 = new G9((params: Record<string, any>) => {
+      const pts: Record<string, any> = {};
+      const lineOpts = { affects: { squareness: true, dragIter: [dragIter] } };
+      function dragon(fromPt: any, toPt: any, dir: number, level: number, name: string): void {
+        if (level === 0) {
+          pts[`ln${name}`] = line(np.concatenate([fromPt, toPt]), lineOpts);
+        } else {
+          const diff = toPt.ref.sub(fromPt.ref);
+          const rotated = np.dot(ROT.ref, diff);
+          const mid = fromPt.ref.add(toPt.ref).add(rotated.mul(params.squareness.ref).mul(dir)).div(2.0);
+          dragon(fromPt, mid.ref, -1, level - 1, `${name}l`);
+          dragon(mid, toPt, 1, level - 1, `${name}r`);
+        }
+      }
+      dragon(params.fromPt.ref, params.toPt.ref, -1, 5, "");
+      pts.from = point(params.fromPt.ref);
+      pts.to = point(params.toPt.ref);
+      return pts;
+    }, {
+      fromPt: [175, 96],
+      toPt: [-175, 39],
+      squareness: [0.8],
+    });
+    g9.align("center", "center").insertInto(host as any);
+
+    const lineObj = ((g9 as any).elements.lnlllll as any);
+    const lineEl = lineObj.el as LocalFakeElement;
+    const c = lineObj._cachedCoords as number[];
+    const off = (g9 as any).getOffset();
+    const cx = (c[0] + c[2]) / 2 + off.left;
+    const cy = (c[1] + c[3]) / 2 + off.top;
+    const eventAt = (clientX: number, clientY: number) => ({
+      clientX,
+      clientY,
+      cancelable: true,
+      stopPropagation: () => {},
+      preventDefault: () => {},
+    });
+    lineEl.dispatch("mousedown", eventAt(cx, cy));
+    for (let i = 1; i <= 10; i++) {
+      dispatchDocumentEvent("mousemove", eventAt(cx + i * 14, cy + i * 2));
+    }
+    dispatchDocumentEvent("mouseup", eventAt(cx + 140, cy + 20));
+    return Number(lineObj._cached?.lastLoss ?? Number.POSITIVE_INFINITY);
+  };
+
+  const lossIter1 = runWithDragIter(1);
+  const lossIter6 = runWithDragIter(6);
+  assert(Number.isFinite(lossIter1) && Number.isFinite(lossIter6), "dragon drag losses should be finite");
+  assert(
+    lossIter6 < lossIter1 * 0.7,
+    `expected dragIter 6 to materially improve dragon drag loss, got ${lossIter1} -> ${lossIter6}`,
   );
 });
 
