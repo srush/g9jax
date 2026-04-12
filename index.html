@@ -374,54 +374,57 @@ return new G9((params) => {
   <!-- Demo: Particles -->
   <div class="demo-section" id="section-particles" style="display:none">
     <h2>Particles (100)</h2>
-    <p class="desc">100 dots with pairwise repellent forces; drag one and watch the field settle.</p>
+    <p class="desc">100 dots with an orange repeller and spring-to-origin regularization.</p>
     <div class="demo-card">
       <div class="demo-loss" id="loss-demo-particles">
         <span>Loss</span><span class="loss-value">—</span>
       </div>
       <div class="demo-canvas" id="demo-particles"></div>
       <div class="demo-code" data-target="#demo-particles">
-        <textarea>const COUNT = 100;
-const GRID = 10;
+        <textarea>const GRID = 10;
+const COUNT = GRID * GRID;
 const STEP = 28;
-const CENTER_PULL = 0.06;
-const initialPos = [];
+const REPULSE_GAIN = np.array([3200], {dtype: np.float32});
+const REPULSE_SOFT = np.array([160], {dtype: np.float32});
+const SPRING_GAIN = np.array([0.12], {dtype: np.float32});
+const basePoints = [];
 for (let gy = 0; gy < GRID; gy++) {
   for (let gx = 0; gx < GRID; gx++) {
-    initialPos.push((gx - (GRID - 1) / 2) * STEP);
-    initialPos.push((gy - (GRID - 1) / 2) * STEP);
+    basePoints.push([(gx - (GRID - 1) / 2) * STEP, (gy - (GRID - 1) / 2) * STEP]);
   }
 }
 
 return new G9((params) => {
-  const pts = {};
-  const flat = params.pos;
-  const center = np.concatenate([params.cx.ref, params.cy.ref]);
-  const pick = (arr, i) => {
-    const start = i * 2;
-    const src = i === COUNT - 1 ? arr : arr.ref;
-    return src.slice([start, start + 2]);
-  };
-
+  const shapes = {};
   for (let i = 0; i < COUNT; i++) {
-    const pi = pick(flat, i);
-    const toward = center.ref.sub(pi.ref).mul(CENTER_PULL);
-    const adjusted = pi.ref.add(toward.ref);
-    pts["p" + i] = point(adjusted.ref, {
-      fill: "#111827",
-      r: 3,
-      affects: {pos: true},
-    });
+    const key = "p" + i;
+    const baseNorm = np.array(basePoints[i], {dtype: np.float32});
+    const repNorm = np.concatenate([params.rx.ref, params.ry.ref]);
+    const awayNorm = baseNorm.ref.sub(repNorm.ref);
+    const dist2 = awayNorm.ref.mul(awayNorm).sum().add(REPULSE_SOFT.ref);
+
+    const basePush = np.array(basePoints[i], {dtype: np.float32});
+    const repPush = np.concatenate([params.rx.ref, params.ry.ref]);
+    const awayPush = basePush.ref.sub(repPush.ref);
+    const push = awayPush.ref.mul(REPULSE_GAIN.ref.div(dist2.ref));
+
+    const baseDisplaced = np.array(basePoints[i], {dtype: np.float32});
+    const displaced = baseDisplaced.ref.add(push.ref);
+    const baseSpring = np.array(basePoints[i], {dtype: np.float32});
+    const springPull = baseSpring.ref.sub(displaced.ref).mul(SPRING_GAIN.ref);
+    const adjusted = displaced.ref.add(springPull.ref);
+
+    shapes[key] = point(adjusted, {fill: "#111827", r: 3});
   }
 
-  pts.repeller = point(center.ref, {
-    fill: "#ef4444",
-    r: 6,
-    affects: {cx: true, cy: true},
+  shapes.repeller = point(np.concatenate([params.rx.ref, params.ry.ref]), {
+    fill: "#f97316",
+    r: 7,
+    affects: {rx: true, ry: true},
   });
 
-  return pts;
-}, {pos: initialPos, cx: [0], cy: [0]});</textarea>
+  return shapes;
+}, {rx: [0], ry: [0]});</textarea>
         <button class="run-btn">Run ▶</button>
         <div class="error-msg"></div>
       </div>

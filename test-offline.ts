@@ -643,6 +643,41 @@ run("particles demo keeps params finite under minimization", () => {
   assert(posVals.every(Number.isFinite), "particle coordinates should remain finite");
 });
 
+run("secondary objectives are summed with main objective", () => {
+  const baseRender = (p: any) => {
+    const xy = np.concatenate([p.x.ref, p.y.ref]);
+    return { p0: point(xy, { affects: { x: true, y: true } }) };
+  };
+  const lossFn = (target: any, coords: any) => {
+    const d = coords.p0.sub(target);
+    return d.ref.mul(d).sum();
+  };
+
+  const paramsNoSecondary: ParamState[] = [
+    { name: "x", value: np.array([0], { dtype: np.float32 }) },
+    { name: "y", value: np.array([0], { dtype: np.float32 }) },
+  ];
+  minimize(paramsNoSecondary, baseRender as any, lossFn as any, [30, 0], { x: true, y: true }, 6);
+  const xNoSecondary = Math.abs(toList(paramsNoSecondary[0].value)[0]);
+
+  const penaltyWeight = np.array([4], { dtype: np.float32 });
+  const renderWithSecondary = (p: any) => {
+    const xy = np.concatenate([p.x.ref, p.y.ref]);
+    const springPenalty = p.x.ref.mul(p.x).sum().mul(penaltyWeight.ref);
+    return {
+      shapes: { p0: point(xy, { affects: { x: true, y: true } }) },
+      secondary: { springPenalty },
+    };
+  };
+  const paramsSecondary: ParamState[] = [
+    { name: "x", value: np.array([0], { dtype: np.float32 }) },
+    { name: "y", value: np.array([0], { dtype: np.float32 }) },
+  ];
+  minimize(paramsSecondary, renderWithSecondary as any, lossFn as any, [30, 0], { x: true, y: true }, 6);
+  const xSecondary = Math.abs(toList(paramsSecondary[0].value)[0]);
+  assert(xSecondary < xNoSecondary, `secondary penalty should reduce x magnitude (${xSecondary} < ${xNoSecondary})`);
+});
+
 run("snake demo runs offline and supports repeated minimization", () => {
   const host = installFakeDom();
   const g9 = new G9(

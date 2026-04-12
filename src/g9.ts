@@ -39,11 +39,17 @@ const np: typeof jaxNp = new Proxy(jaxNp as any, {
 }) as typeof jaxNp;
 
 type ShapeArgs = { type: "point" | "line"; c: any } & Record<string, any>;
+type RenderShapeMap = Record<string, ShapeArgs>;
+type SecondaryScores = Record<string, any>;
+type RenderOutput = RenderShapeMap | {
+  shapes: RenderShapeMap;
+  secondary?: SecondaryScores;
+};
 type ParamState = { name: string; value: any };
 type LossFn = (target: any, coords: Record<string, any>) => any;
 type RenderFn = (
   params: Record<string, any>,
-) => Record<string, ShapeArgs>;
+) => RenderOutput;
 
 type RuntimeStats = {
   minimizeCalls: number;
@@ -229,21 +235,87 @@ function emitOptimizeLoss(containerId: string | null, loss: number): void {
 // We strip everything except c, giving jax a pure JsTree to trace through.
 // ---------------------------------------------------------------------------
 
-function renderCoords(
+function isShapeArgs(value: any): value is ShapeArgs {
+  return !!value
+    && typeof value === "object"
+    && "c" in value
+    && (value.type === "point" || value.type === "line");
+}
+
+function parseRenderOutput(output: RenderOutput): {
+  shapes: RenderShapeMap;
+  secondary: SecondaryScores | null;
+} {
+  if (!output || typeof output !== "object") {
+    throw new TypeError("Render function must return an object.");
+  }
+  if ("shapes" in output && !isShapeArgs((output as any).shapes)) {
+    const rawShapes = (output as any).shapes;
+    if (!rawShapes || typeof rawShapes !== "object") {
+      throw new TypeError("Render output 'shapes' must be an object.");
+    }
+    const shapes: RenderShapeMap = {};
+    for (const [id, shape] of Object.entries(rawShapes)) {
+      if (!isShapeArgs(shape)) throw new TypeError(`Render entry '${id}' is not a valid shape.`);
+      shapes[id] = shape;
+    }
+    const rawSecondary = (output as any).secondary;
+    const secondary = rawSecondary && typeof rawSecondary === "object"
+      ? rawSecondary as SecondaryScores
+      : null;
+    return { shapes, secondary };
+  }
+
+  const shapes: RenderShapeMap = {};
+  let secondary: SecondaryScores | null = null;
+  for (const [id, value] of Object.entries(output as Record<string, any>)) {
+    if (id === "secondary" && value && typeof value === "object" && !isShapeArgs(value)) {
+      secondary = value as SecondaryScores;
+      continue;
+    }
+    if (!isShapeArgs(value)) {
+      throw new TypeError(`Render entry '${id}' is not a valid shape.`);
+    }
+    shapes[id] = value;
+  }
+  return { shapes, secondary };
+}
+
+function sumSecondaryScores(loss: any, secondary: SecondaryScores | null): any {
+  if (!secondary) return loss;
+  let total = loss;
+  for (const value of Object.values(secondary)) {
+    if (value == null) continue;
+    let scalar: any;
+    if (typeof value === "number") {
+      scalar = np.array([value], { dtype: np.float32 }).sum();
+    } else if (value && typeof value === "object" && typeof (value as any).sum === "function") {
+      scalar = (value as any).sum();
+    } else if (value && typeof value === "object" && "ref" in (value as any) && typeof (value as any).ref?.sum === "function") {
+      scalar = (value as any).ref.sum();
+    } else {
+      scalar = np.array([Number(value)], { dtype: np.float32 }).sum();
+    }
+    total = total.ref.add(scalar);
+  }
+  return total;
+}
+
+function renderEval(
   renderFn: RenderFn,
   paramNames: string[],
   paramValues: any[],
-): Record<string, any> {
+): { coords: Record<string, any>; secondary: SecondaryScores | null } {
   const obj: Record<string, any> = {};
   for (let i = 0; i < paramNames.length; i++) {
     obj[paramNames[i]] = paramValues[i];
   }
-  const shapes = renderFn(obj);
+  const { shapes, secondary } = parseRenderOutput(renderFn(obj));
   const coords: Record<string, any> = {};
   for (const [id, shape] of Object.entries(shapes)) {
     coords[id] = shape.c;
   }
-  return coords;
+  return { coords, secondary };
 }
 
 // ---------------------------------------------------------------------------
@@ -438,8 +510,8 @@ export function minimize(
     const combinedFn = (combined: any) => {
       const t = combined.ref.slice([0, tLen]);
       const pv = splitParams(combined);
-      const coords = renderCoords(renderFn, paramNames, pv);
-      return lossFn(t, coords);
+      const { coords, secondary } = renderEval(renderFn, paramNames, pv);
+      return sumSecondaryScores(lossFn(t, coords), secondary);
     };
     const renderOnlyFn = (flat: any) => {
       const pv: any[] = [];
@@ -450,7 +522,7 @@ export function minimize(
         pv.push((isLast ? flat : flat.ref).slice([off, off + n]));
         off += n;
       }
-      const coords = renderCoords(renderFn, paramNames, pv);
+      const { coords } = renderEval(renderFn, paramNames, pv);
       renderIds = Object.keys(coords);
       const arrays: any[] = [];
       for (const c of Object.values(coords)) arrays.push(c);
@@ -1170,8 +1242,8 @@ export class G9 {
     const combinedFn = (combined: any) => {
       const t = combined.ref.slice([0, tLen]);
       const pv = splitParams(combined);
-      const coords = renderCoords(this.renderFn, paramNames, pv);
-      return lossFn(t, coords);
+      const { coords, secondary } = renderEval(this.renderFn, paramNames, pv);
+      return sumSecondaryScores(lossFn(t, coords), secondary);
     };
     let renderIds: string[] = [];
     const renderOnlyFn = (flat: any) => {
@@ -1183,7 +1255,7 @@ export class G9 {
         pv.push((isLast ? flat : flat.ref).slice([off, off + n]));
         off += n;
       }
-      const coords = renderCoords(this.renderFn, paramNames, pv);
+      const { coords } = renderEval(this.renderFn, paramNames, pv);
       renderIds = Object.keys(coords);
       const arrays: any[] = [];
       for (const c of Object.values(coords)) arrays.push(c);
@@ -1305,7 +1377,7 @@ export class G9 {
   render(metaOnly = false): void {
     const obj: Record<string, any> = {};
     for (const p of this.params) obj[p.name] = p.value.ref;
-    const renderables = this.renderFn(obj);
+    const { shapes: renderables } = parseRenderOutput(this.renderFn(obj));
     if (!renderables) return;
 
     const ids = new Set(Object.keys(renderables));
