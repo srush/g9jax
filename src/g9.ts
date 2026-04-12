@@ -1006,9 +1006,6 @@ class LineEl {
       const dragOpt: ShapeOptions = {
         ...optRaw,
       };
-      if (dragOpt.dragIter == null) {
-        dragOpt.dragIter = [5];
-      }
       const c = this._cachedCoords.slice();
       const off = g9.getOffset();
       const cx = evt.clientX - off.left;
