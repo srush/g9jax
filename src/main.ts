@@ -298,6 +298,7 @@ async function main() {
   const demos: DemoSpec[] = [
     ["section-points", "#demo-points"],
     ["section-rings", "#demo-rings"],
+    ["section-classifier", "#demo-classifier"],
     ["section-lines", "#demo-lines"],
     ["section-particles", "#demo-particles"],
     ["section-dragon", "#demo-dragon"],

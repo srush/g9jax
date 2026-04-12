@@ -428,6 +428,136 @@ return new G9((params) => {
     </div>
   </div>
 
+  <!-- Demo: Mini Classifier -->
+  <div class="demo-section" id="section-classifier" style="display:none">
+    <h2>Mini Classifier (2-layer, 10 params)</h2>
+    <p class="desc">Drag blue/red data points; side parameter points and network weights update to fit classification.</p>
+    <div class="demo-card">
+      <div class="demo-loss" id="loss-demo-classifier">
+        <span>Loss</span><span class="loss-value">—</span>
+      </div>
+      <div class="demo-canvas" id="demo-classifier"></div>
+      <div class="demo-code" data-target="#demo-classifier">
+        <textarea>const GRID = 25;
+const CELL_COUNT = GRID * GRID;
+const AXIS_MIN = -120;
+const AXIS_MAX = 120;
+const STEP = (AXIS_MAX - AXIS_MIN) / (GRID - 1);
+const BLUE_BG = "#dbeafe";
+const RED_BG = "#fee2e2";
+const BLUE_PT = "#2563eb";
+const RED_PT = "#ef4444";
+const PARAM_PT = "#8b5cf6";
+const HIDE = np.array([5000, 5000], {dtype: np.float32});
+const ONE = np.array([1], {dtype: np.float32});
+const SHARP = np.array([10], {dtype: np.float32});
+
+const TRAINING = [
+  {name: "d0", xy: [-92, -50], cls: 1, color: BLUE_PT},
+  {name: "d1", xy: [-58, -12], cls: 1, color: BLUE_PT},
+  {name: "d2", xy: [-15, 22], cls: 1, color: BLUE_PT},
+  {name: "d3", xy: [30, 66], cls: 1, color: BLUE_PT},
+  {name: "d4", xy: [72, 98], cls: 1, color: BLUE_PT},
+  {name: "d5", xy: [-96, -122], cls: -1, color: RED_PT},
+  {name: "d6", xy: [-56, -94], cls: -1, color: RED_PT},
+  {name: "d7", xy: [-8, -46], cls: -1, color: RED_PT},
+  {name: "d8", xy: [42, 16], cls: -1, color: RED_PT},
+  {name: "d9", xy: [94, 56], cls: -1, color: RED_PT},
+];
+
+const MODEL_PARAMS = ["w11", "w12", "w21", "w22", "b1", "b2", "v1", "v2", "b3", "s"];
+const modelAffects = Object.fromEntries(MODEL_PARAMS.map((name) => [name, true]));
+const cellCenters = Array.from({length: CELL_COUNT}, (_, i) => {
+  const gx = i % GRID;
+  const gy = Math.floor(i / GRID);
+  return [AXIS_MIN + gx * STEP, AXIS_MIN + gy * STEP];
+});
+
+const initialParams = Object.fromEntries(
+  TRAINING.map((item) => [item.name, item.xy]).concat([
+    ["w11", [1.2]],
+    ["w12", [-1.0]],
+    ["w21", [-1.15]],
+    ["w22", [0.95]],
+    ["b1", [0.0]],
+    ["b2", [0.0]],
+    ["v1", [1.0]],
+    ["v2", [-1.0]],
+    ["b3", [0.0]],
+    ["s", [1.0]],
+  ])
+);
+
+const sigmoid = (x) => ONE.ref.div(ONE.ref.add(np.exp(x.neg())));
+const softplus = (x) => np.log(np.exp(x).add(ONE.ref));
+
+const forwardLogit = (xy, params) => {
+  const x1 = xy.ref.slice([0, 1]);
+  const y1 = xy.ref.slice([1, 2]);
+  const x2 = xy.ref.slice([0, 1]);
+  const y2 = xy.ref.slice([1, 2]);
+
+  const h1pre = params.w11.mul(x1.ref).add(params.w12.mul(y1.ref)).add(params.b1);
+  const h2pre = params.w21.mul(x2.ref).add(params.w22.mul(y2.ref)).add(params.b2);
+  const h1 = np.tanh(h1pre.ref);
+  const h2 = np.tanh(h2pre.ref);
+  const out = params.v1.mul(h1.ref).add(params.v2.mul(h2.ref)).add(params.b3);
+  return out.mul(params.s);
+};
+
+return new G9((params) => {
+  const shapes = {};
+  const secondary = {};
+  const model = Object.fromEntries(
+    MODEL_PARAMS.map((name) => [name, params[name]])
+  );
+
+  Array.from({length: CELL_COUNT}, (_, i) => {
+    const centerBlue = np.array(cellCenters[i], {dtype: np.float32});
+    const centerRed = np.array(cellCenters[i], {dtype: np.float32});
+    const logitBlue = forwardLogit(centerBlue, model);
+    const logitRed = forwardLogit(centerRed, model);
+    const pBlue = sigmoid(logitBlue.mul(SHARP.ref));
+    const pBlue2 = sigmoid(logitRed.mul(SHARP.ref));
+    const blueCoord = centerBlue.ref.add(HIDE.ref.mul(ONE.ref.sub(pBlue.ref)));
+    const redCoord = centerRed.ref.add(HIDE.ref.mul(pBlue2.ref));
+    shapes["bgb" + i] = point(blueCoord, {fill: BLUE_BG, r: 5.1, affects: {}});
+    shapes["bgr" + i] = point(redCoord, {fill: RED_BG, r: 5.1, affects: {}});
+    return null;
+  });
+
+  TRAINING.forEach((item, i) => {
+    const xy = params[item.name];
+    const logit = forwardLogit(xy, model);
+    const margin = item.cls > 0 ? logit : logit.neg();
+    secondary["cls" + i] = softplus(margin.neg());
+    shapes[item.name] = point(xy, {
+      fill: item.color,
+      r: 6,
+      affects: {...modelAffects, [item.name]: true},
+    });
+  });
+
+  MODEL_PARAMS.forEach((name, idx) => {
+    const anchorX = np.array([235], {dtype: np.float32});
+    const anchorY = np.array([-145 + idx * 32], {dtype: np.float32});
+    const xPos = anchorX.ref.add(model[name].mul(26));
+    const coord = np.concatenate([xPos.ref, anchorY.ref]);
+    shapes["param_" + name] = point(coord, {
+      fill: PARAM_PT,
+      r: 4.5,
+      affects: {[name]: true},
+    });
+  });
+
+  return {shapes, secondary};
+}, initialParams);</textarea>
+        <button class="run-btn">Run ▶</button>
+        <div class="error-msg"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- Demo: Lines -->
   <div class="demo-section" id="section-lines" style="display:none">
     <h2>Lines with affects</h2>
