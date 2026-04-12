@@ -44,6 +44,18 @@
       color: var(--muted);
       font-size: 1.1rem;
     }
+    .hero-links {
+      margin-top: 0.5rem;
+      font-size: 0.95rem;
+    }
+    .hero-links a {
+      color: var(--accent);
+      text-decoration: none;
+      font-weight: 600;
+    }
+    .hero-links a:hover {
+      text-decoration: underline;
+    }
     .hero-controls {
       margin-top: 0.75rem;
       display: flex;
@@ -246,6 +258,7 @@
   <p>Automatically interactive graphics powered by
     <a href="https://github.com/ekzhang/jax-js" style="color:var(--accent);text-decoration:none;">jax-js</a>
     reverse-mode gradients. Drag the shapes!</p>
+  <p><a href="https://github.com/srush/g9jax" style="color:var(--accent);text-decoration:none;">GitHub repository</a></p>
   <div class="hero-controls">
     <div class="select-inline">
       <label for="backend-select">Backend:</label>
@@ -630,7 +643,7 @@ return new G9((params) => {
       </div>
       <div class="demo-canvas" id="demo-lines"></div>
       <div class="demo-code" data-target="#demo-lines">
-        <textarea>const opts = {"stroke-width": 9, "stroke-linecap": "round"};
+        <textarea>const opts = {"stroke-width": 9, "stroke-linecap": "round", opt: {regWeight: [0]}};
 
 return new G9((params) => ({
   free: line(params.free, {
@@ -709,7 +722,7 @@ return new G9((params) => {
       fill: "#f97316",
       r: 8,
       affects: {bx: true, by: true},
-      opt: {regWeight: [1]},
+      opt: {regWeight: [0]},
     }),
   };
   return {
