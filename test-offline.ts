@@ -793,8 +793,8 @@ run("dragon render survives optimization path", () => {
     return delta.ref.mul(delta).sum();
   };
   const target: [number, number] = [100, 50];
-  const fromBefore = toList(params[0].value);
-  const initialLoss = (fromBefore[0] - target[0]) ** 2 + (fromBefore[1] - target[1]) ** 2;
+  const initialFrom: [number, number] = [175, 96];
+  const initialLoss = (initialFrom[0] - target[0]) ** 2 + (initialFrom[1] - target[1]) ** 2;
   minimize(params, renderFn, lossFn, target, null, 3);
   const fromAfter = toList(params[0].value);
   const finalLoss = (fromAfter[0] - target[0]) ** 2 + (fromAfter[1] - target[1]) ** 2;
