@@ -1,9 +1,10 @@
-import { numpy as np, vmap } from "@jax-js/jax";
+import { vmap } from "@jax-js/jax";
 import {
   G9,
   minimize,
   point,
   line,
+  np,
   getG9RuntimeStats,
   resetG9RuntimeStats,
   getG9DragDebugEnabled,
@@ -490,17 +491,24 @@ run("cube demo render path works and stays finite", () => {
     { name: "ax", value: np.array([0.2], { dtype: np.float32 }) },
     { name: "ay", value: np.array([0.45], { dtype: np.float32 }) },
   ];
+  const target: [number, number] = [60, -20];
   const initialShapes = renderFn({ ax: params[0].value.ref, ay: params[1].value.ref });
   assert(Object.keys(initialShapes).length === 20, "cube demo should render 12 edges + 8 points");
+  const initialP0 = toList(initialShapes.p0.c);
+  const initialLoss = (initialP0[0] - target[0]) ** 2 + (initialP0[1] - target[1]) ** 2;
 
   const lossFn = (target: any, coords: any) => {
     const d = coords.p0.sub(target);
     return d.ref.mul(d).sum();
   };
-  minimize(params, renderFn as any, lossFn as any, [60, -20], { ax: true, ay: true }, 5);
+  minimize(params, renderFn as any, lossFn as any, target, { ax: true, ay: true }, 5);
   const ax = toList(params[0].value)[0];
   const ay = toList(params[1].value)[0];
   assert(Number.isFinite(ax) && Number.isFinite(ay), "cube rotation params should remain finite");
+  const finalShapes = renderFn({ ax: params[0].value.ref, ay: params[1].value.ref });
+  const finalP0 = toList(finalShapes.p0.c);
+  const finalLoss = (finalP0[0] - target[0]) ** 2 + (finalP0[1] - target[1]) ** 2;
+  assert(finalLoss < initialLoss, `cube p0 should move toward target, loss ${initialLoss} -> ${finalLoss}`);
 });
 
 run("line drag loss minimizes", () => {
@@ -776,11 +784,16 @@ run("dragon render survives optimization path", () => {
     const delta = coords.from.sub(target);
     return delta.ref.mul(delta).sum();
   };
-
-  minimize(params, renderFn, lossFn, [100, 50], null, 3);
+  const target: [number, number] = [100, 50];
+  const fromBefore = toList(params[0].value);
+  const initialLoss = (fromBefore[0] - target[0]) ** 2 + (fromBefore[1] - target[1]) ** 2;
+  minimize(params, renderFn, lossFn, target, null, 3);
+  const fromAfter = toList(params[0].value);
+  const finalLoss = (fromAfter[0] - target[0]) ** 2 + (fromAfter[1] - target[1]) ** 2;
   assert(toList(params[0].value).every(Number.isFinite), "dragon fromPt should remain finite");
   assert(toList(params[1].value).every(Number.isFinite), "dragon toPt should remain finite");
   assert(toList(params[2].value).every(Number.isFinite), "dragon squareness should remain finite");
+  assert(finalLoss < initialLoss, `dragon start point should move toward target, loss ${initialLoss} -> ${finalLoss}`);
 });
 
 run("tree render survives optimization path", () => {
