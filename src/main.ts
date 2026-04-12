@@ -270,7 +270,7 @@ async function main() {
     }
   }
 
-  const preferred: Device[] = ["webgpu", "webgl", "cpu"];
+  const preferred: Device[] = ["wasm", "webgpu", "webgl", "cpu"];
   const chosen = preferred.find((d) => readyDevices.includes(d)) ?? readyDevices[0];
   defaultDevice(chosen);
   console.log("jax-js default device:", chosen);
@@ -299,6 +299,7 @@ async function main() {
     ["section-points", "#demo-points"],
     ["section-rings", "#demo-rings"],
     ["section-lines", "#demo-lines"],
+    ["section-particles", "#demo-particles"],
     ["section-dragon", "#demo-dragon"],
     ["section-tree", "#demo-tree"],
     ["section-snake", "#demo-snake"],

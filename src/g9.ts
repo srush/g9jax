@@ -1,4 +1,42 @@
-import { numpy as np, jit, jacfwd, vmap } from "@jax-js/jax";
+import { numpy as jaxNp, jit, grad, jacfwd, vmap } from "@jax-js/jax";
+
+function isTracerLike(value: any): boolean {
+  return !!value
+    && typeof value === "object"
+    && "_trace" in value
+    && typeof value.dataSync !== "function";
+}
+
+function concatWithGradCompat(values: any[]): any {
+  if (!Array.isArray(values) || values.length === 0) {
+    return jaxNp.concatenate(values as any);
+  }
+  const anchor = values.find(isTracerLike);
+  if (!anchor) return jaxNp.concatenate(values);
+  const zero = anchor.ref.sum().mul(0);
+  const lifted = values.map((value) => {
+    if (isTracerLike(value)) return value;
+    if (value && typeof value === "object" && "ref" in value) {
+      return (value as any).ref.add(zero);
+    }
+    return value;
+  });
+  return jaxNp.concatenate(lifted);
+}
+
+function isReverseModeUnsupported(error: any): boolean {
+  if (error?.name === "NonlinearError") return true;
+  const message = String(error?.message ?? error);
+  return message.includes("Nonlinear operation in backward pass");
+}
+
+const np: typeof jaxNp = new Proxy(jaxNp as any, {
+  get(target, prop, receiver) {
+    if (prop === "concatenate") return concatWithGradCompat;
+    const value = Reflect.get(target, prop, receiver);
+    return typeof value === "function" ? value.bind(target) : value;
+  },
+}) as typeof jaxNp;
 
 type ShapeArgs = { type: "point" | "line"; c: any } & Record<string, any>;
 type ParamState = { name: string; value: any };
@@ -214,7 +252,7 @@ function renderCoords(
 
 function readVec(params: ParamState[]): number[] {
   const vals: number[] = [];
-  for (const p of params) for (const v of toJSArr(p.value)) vals.push(v);
+  for (const p of params) for (const v of toJSArr(p.value.ref)) vals.push(v);
   return vals;
 }
 
@@ -263,12 +301,16 @@ function buildAffectsMask(
 type CachedJit = {
   jitLoss: any;
   jitGrad: any;
+  jitGradFallback: any;
+  useGradFallback: boolean;
   jitRender: any;
   jitBatchLoss: any;
   renderIds: string[];
   targetLen: number;
   lastX: number[];
   lastLoss: number;
+  lastConverged: boolean;
+  lastHitLimit: boolean;
   affectsRef: Record<string, any> | null | undefined;
   affectsMask: Float64Array | null;
   combinedBuffer: Float32Array;
@@ -303,11 +345,15 @@ export function minimize(
     return {
       jitLoss: null,
       jitGrad: null,
+      jitGradFallback: null,
+      useGradFallback: false,
       jitRender: null,
       jitBatchLoss: null,
       renderIds: [],
       targetLen: 0,
       lastLoss: 0,
+      lastConverged: false,
+      lastHitLimit: false,
       lastX: [],
       affectsRef: null,
       affectsMask: null,
@@ -366,12 +412,15 @@ export function minimize(
     ? cached.bfgsHy
     : new Float64Array(dim);
 
-  let jitLoss: any, jitGrad: any, jitRender: any, jitBatchLoss: any;
+  let jitLoss: any, jitGrad: any, jitGradFallback: any, jitRender: any, jitBatchLoss: any;
+  let useGradFallback = cached?.useGradFallback ?? false;
   let renderIds: string[] = cached?.renderIds ?? [];
   if (cached && cached.targetLen === tLen) {
     runtimeStats.jitCacheHits += 1;
     jitLoss = cached.jitLoss;
     jitGrad = cached.jitGrad;
+    jitGradFallback = cached.jitGradFallback ?? cached.jitGrad;
+    useGradFallback = cached.useGradFallback ?? false;
     jitRender = cached.jitRender;
     jitBatchLoss = cached.jitBatchLoss;
   } else {
@@ -408,12 +457,13 @@ export function minimize(
       return np.concatenate(arrays);
     };
     jitLoss = jit(combinedFn);
-    jitGrad = jit(jacfwd(combinedFn));
+    jitGrad = jit(grad(combinedFn));
+    jitGradFallback = jit(jacfwd(combinedFn));
+    useGradFallback = false;
     jitRender = jit(renderOnlyFn);
     jitBatchLoss = jit(vmap(combinedFn, [0]));
     runtimeStats.jitBuilds += 1;
-    const probeX: number[] = [];
-    for (const p of params) for (const v of toJSArr(p.value.ref)) probeX.push(v);
+    const probeX = readVec(params);
     jitRender(np.array(probeX, { dtype: np.float32 }));
   }
 
@@ -421,11 +471,15 @@ export function minimize(
     return {
       jitLoss,
       jitGrad,
+      jitGradFallback,
+      useGradFallback,
       jitRender,
       jitBatchLoss,
       renderIds,
       targetLen: tLen,
       lastLoss: cached?.lastLoss ?? 0,
+      lastConverged: cached?.lastConverged ?? false,
+      lastHitLimit: cached?.lastHitLimit ?? false,
       lastX: [],
       affectsRef: null,
       affectsMask: null,
@@ -447,7 +501,7 @@ export function minimize(
   const affectsMask = cached && cached.affectsRef === affects
     ? cached.affectsMask
     : buildAffectsMask(params, sizes, affects);
-  let x = cached && cached.lastX.length === dim ? cached.lastX.slice() : readVec(params);
+  let x = readVec(params);
   for (let i = 0; i < tLen; i++) {
     const tv = target[i];
     combinedBuffer[i] = tv;
@@ -463,10 +517,20 @@ export function minimize(
     for (let i = 0; i < dim; i++) bfgsH[i * dim + i] = 1;
   }
 
+  let converged = false;
+  let iterationsUsed = 0;
   for (let it = 0; it < maxIter; it++) {
+    iterationsUsed = it + 1;
     for (let i = 0; i < dim; i++) combinedBuffer[tLen + i] = x[i];
     const combined = np.array(combinedBuffer, { dtype: np.float32 });
-    const fullG = toJSArr(jitGrad(combined));
+    let fullG: number[];
+    try {
+      fullG = toJSArr((useGradFallback ? jitGradFallback : jitGrad)(combined));
+    } catch (error) {
+      if (useGradFallback || !isReverseModeUnsupported(error)) throw error;
+      useGradFallback = true;
+      fullG = toJSArr(jitGradFallback(combined));
+    }
     if (affectsMask) {
       for (let i = 0; i < dim; i++) gBuffer[i] = fullG[tLen + i] * affectsMask[i];
     } else {
@@ -475,7 +539,10 @@ export function minimize(
 
     let gnorm2 = 0;
     for (let i = 0; i < dim; i++) gnorm2 += gBuffer[i] * gBuffer[i];
-    if (gnorm2 < 1e-12) break;
+    if (gnorm2 < 1e-12) {
+      converged = true;
+      break;
+    }
 
     let gmax = 0;
     for (let i = 0; i < dim; i++) gmax = Math.max(gmax, Math.abs(gBuffer[i]));
@@ -565,7 +632,14 @@ export function minimize(
 
       for (let i = 0; i < dim; i++) combinedBuffer[tLen + i] = x[i];
       const nextCombined = np.array(combinedBuffer, { dtype: np.float32 });
-      const nextGradFull = toJSArr(jitGrad(nextCombined));
+      let nextGradFull: number[];
+      try {
+        nextGradFull = toJSArr((useGradFallback ? jitGradFallback : jitGrad)(nextCombined));
+      } catch (error) {
+        if (useGradFallback || !isReverseModeUnsupported(error)) throw error;
+        useGradFallback = true;
+        nextGradFull = toJSArr(jitGradFallback(nextCombined));
+      }
       if (affectsMask) {
         for (let i = 0; i < dim; i++) bfgsGradNext[i] = nextGradFull[tLen + i] * affectsMask[i];
       } else {
@@ -621,6 +695,7 @@ export function minimize(
     }
   }
 
+  const hitLimit = maxIter > 0 && !converged && iterationsUsed >= maxIter;
   const loss = evalLoss(jitLoss, tLen, x, combinedBuffer);
   if (dragDebugEnabled && Number.isFinite(loss)) {
     debugLossStats.sum += loss;
@@ -632,11 +707,15 @@ export function minimize(
   return {
     jitLoss,
     jitGrad,
+    jitGradFallback,
+    useGradFallback,
     jitRender,
     jitBatchLoss,
     renderIds,
     targetLen: tLen,
     lastLoss: Number.isFinite(loss) ? loss : 0,
+    lastConverged: converged,
+    lastHitLimit: hitLimit,
     lastX: x,
     affectsRef: affects,
     affectsMask,
@@ -695,6 +774,8 @@ class PointEl {
     this._cached = g9._warmup(lossFn, [0, 0]);
 
     addDrag(this.el, (_evt) => {
+      this._cached.lastConverged = false;
+      this._cached.lastHitLimit = false;
       const c0 = this._cachedCoords.slice();
       return {
         drag: (dx, dy) => {
@@ -776,6 +857,8 @@ class LineEl {
     this._cached = g9._warmup(lossFn, [0, 0, 0]);
 
     addDrag(this.el, (evt) => {
+      this._cached.lastConverged = false;
+      this._cached.lastHitLimit = false;
       const c = this._cachedCoords.slice();
       const off = g9.getOffset();
       const cx = evt.clientX - off.left;
@@ -835,6 +918,7 @@ class LineEl {
 type DragSession = {
   drag: (dx: number, dy: number) => void;
   end?: () => void;
+  shouldContinue?: () => boolean;
 };
 
 function addDrag(
@@ -874,12 +958,14 @@ function addDrag(
       throw error;
     }
     const onDrag = session.drag;
+    const shouldContinue = session.shouldContinue;
     const sx = f.clientX, sy = f.clientY;
     let latestDx = 0;
     let latestDy = 0;
     let rafId = 0;
 
     const tick = () => {
+      if (shouldContinue && !shouldContinue()) return;
       onDrag(latestDx, latestDy);
       rafId = scheduleFrame(tick);
     };
@@ -1104,7 +1190,9 @@ export class G9 {
       return np.concatenate(arrays);
     };
     const jitLoss = jit(combinedFn);
-    const jitGrad = jit(jacfwd(combinedFn));
+    const jitGrad = jit(grad(combinedFn));
+    const jitGradFallback = jit(jacfwd(combinedFn));
+    let useGradFallback = false;
     const jitRender = jit(renderOnlyFn);
     const jitBatchLoss = jit(vmap(combinedFn, [0]));
     runtimeStats.warmupBuilds += 1;
@@ -1114,7 +1202,13 @@ export class G9 {
     for (let i = 0; i < tLen; i++) warmupCombined[i] = target[i] ?? 0;
     for (let i = 0; i < dim; i++) warmupCombined[tLen + i] = x[i];
     jitLoss(np.array(warmupCombined, { dtype: np.float32 }));
-    jitGrad(np.array(warmupCombined, { dtype: np.float32 }));
+    try {
+      jitGrad(np.array(warmupCombined, { dtype: np.float32 }));
+    } catch (error) {
+      if (!isReverseModeUnsupported(error)) throw error;
+      useGradFallback = true;
+      jitGradFallback(np.array(warmupCombined, { dtype: np.float32 }));
+    }
     const warmupBatch = new Float32Array(totalLen * LINE_SEARCH_TRIALS);
     for (let ls = 0; ls < LINE_SEARCH_TRIALS; ls++) {
       const row = ls * totalLen;
@@ -1124,12 +1218,16 @@ export class G9 {
     return {
       jitLoss,
       jitGrad,
+      jitGradFallback,
+      useGradFallback,
       jitRender,
       jitBatchLoss,
       renderIds,
       targetLen: tLen,
       lastX: x,
       lastLoss: 0,
+      lastConverged: false,
+      lastHitLimit: false,
       affectsRef: null,
       affectsMask: null,
       combinedBuffer: new Float32Array(tLen + dim),
@@ -1155,11 +1253,29 @@ export class G9 {
     forceRender = false,
     cached?: CachedJit,
   ): CachedJit {
-    const dragIterations = lineSearchEnabled ? DRAG_ITER_LINE_SEARCH : DRAG_ITER_ADAPTIVE;
+    const affectsObj = affects ?? {};
+    const dragIterRaw = "dragIter" in affectsObj ? (affectsObj as any).dragIter : null;
+    const dragIterOverride = dragIterRaw == null
+      ? NaN
+      : Array.isArray(dragIterRaw)
+        ? Number(dragIterRaw[0])
+        : Number(dragIterRaw);
+    const maxIterCap = Number.isFinite(dragIterOverride)
+      ? Math.max(0, Math.floor(dragIterOverride))
+      : lineSearchEnabled
+        ? DRAG_ITER_LINE_SEARCH
+        : DRAG_ITER_ADAPTIVE;
+    const targetChanged = !cached || cached.targetLen !== target.length || target.some((v, i) => {
+      return Math.abs(v - cached.combinedBuffer[i]) > 1e-4;
+    });
+    const shouldRun = !cached || targetChanged || (!cached.lastConverged && !cached.lastHitLimit);
+    const dragIterations = shouldRun ? maxIterCap : 0;
     const c = minimize(this.params, this.renderFn, lossFn, target, affects, dragIterations, cached);
     emitOptimizeLoss(this.containerId, c.lastLoss);
     this._dragRenderCounter += 1;
-    if (forceRender || this._dragRenderCounter % DRAG_RENDER_EVERY === 0) {
+    // Always render when the drag target moves so a single moved frame cannot get skipped.
+    const shouldRender = forceRender || targetChanged || this._dragRenderCounter % DRAG_RENDER_EVERY === 0;
+    if (c.lastX.length > 0 && shouldRender) {
       this._renderFast(c);
       this._dragRenderCounter = 0;
     }
