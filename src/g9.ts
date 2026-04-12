@@ -103,9 +103,9 @@ export function line(
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const MOBILE_POINT_RADIUS_SCALE = 1.35;
-const DRAG_ITER_ADAPTIVE = 14;
-const DRAG_ITER_LINE_SEARCH = 10;
-const DRAG_START_REG_WEIGHT = 1e-3;
+const DRAG_ITER_ADAPTIVE = 5;
+const DRAG_ITER_LINE_SEARCH = 5;
+const DRAG_START_REG_WEIGHT = 10;
 const LINE_SEARCH_TRIALS = 12;
 const DRAG_RENDER_EVERY = 2;
 let activeDragCount = 0;
@@ -1007,7 +1007,7 @@ class LineEl {
         ...optRaw,
       };
       if (dragOpt.dragIter == null) {
-        dragOpt.dragIter = [24];
+        dragOpt.dragIter = [5];
       }
       const c = this._cachedCoords.slice();
       const off = g9.getOffset();
