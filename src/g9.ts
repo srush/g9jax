@@ -418,6 +418,7 @@ type CachedJit = {
 type MinimizeRegularizer = {
   anchor: ArrayLike<number> | null;
   weight: number;
+  stepWeight?: number;
 };
 
 export function minimize(
@@ -592,6 +593,9 @@ export function minimize(
   const regularizerWeight = Number.isFinite(regularizer?.weight)
     ? Math.max(0, Number(regularizer?.weight))
     : 0;
+  const stepRegularizerWeight = Number.isFinite(regularizer?.stepWeight)
+    ? Math.max(0, Number(regularizer?.stepWeight))
+    : 0;
   const regularizerAnchor = regularizer?.anchor && regularizer.anchor.length === dim
     ? regularizer.anchor
     : null;
@@ -649,8 +653,9 @@ export function minimize(
       const f0 = evalLoss(jitLoss, tLen, x, combinedBuffer) + regularizeLoss(x);
       let descentDot = 0;
       let stepNorm2 = 0;
-      const maxBfgsCoordStep = 18.0;
-      const maxBfgsStepNorm = 24.0;
+      const stepTrustScale = Math.sqrt(1 + stepRegularizerWeight * 500);
+      const maxBfgsCoordStep = 18.0 / stepTrustScale;
+      const maxBfgsStepNorm = 24.0 / stepTrustScale;
       for (let i = 0; i < dim; i++) {
         const row = i * dim;
         let projected = 0;
@@ -694,7 +699,8 @@ export function minimize(
         }
       }
 
-      let alpha = Math.min(1.0, 8.0 / (Math.sqrt(stepNorm2) + 1e-6));
+      const alphaNormCap = 8.0 / stepTrustScale;
+      let alpha = Math.min(1.0, alphaNormCap / (Math.sqrt(stepNorm2) + 1e-6));
       let fillAlpha = alpha;
       for (let ls = 0; ls < LINE_SEARCH_TRIALS; ls++) {
         const row = ls * totalLen + tLen;
@@ -719,8 +725,17 @@ export function minimize(
         }
         return regularizerWeight * total;
       };
+      const regularizeStepLoss = (trialAlpha: number): number => {
+        if (stepRegularizerWeight <= 0) return 0;
+        let total = 0;
+        for (let i = 0; i < dim; i++) {
+          const stepDelta = trialAlpha * bfgsStep[i];
+          total += stepDelta * stepDelta;
+        }
+        return stepRegularizerWeight * total;
+      };
       for (let ls = 0; ls < LINE_SEARCH_TRIALS; ls++) {
-        const fTrial = batchedTrialLosses[ls] + regularizeTrialLoss(acceptedAlpha);
+        const fTrial = batchedTrialLosses[ls] + regularizeTrialLoss(acceptedAlpha) + regularizeStepLoss(acceptedAlpha);
         if (Number.isFinite(fTrial) && fTrial <= f0 + 1e-4 * acceptedAlpha * descentDot) {
           for (let i = 0; i < dim; i++) x[i] = x0Buffer[i] + acceptedAlpha * bfgsStep[i];
           accepted = true;
@@ -732,7 +747,8 @@ export function minimize(
       if (!accepted) {
         bfgsH.fill(0);
         for (let i = 0; i < dim; i++) bfgsH[i * dim + i] = 1;
-        const fallbackStep = Math.min(0.12, 2.0 / (Math.sqrt(gnorm2) + 1e-6));
+        const fallbackStepBase = Math.min(0.12, 2.0 / (Math.sqrt(gnorm2) + 1e-6));
+        const fallbackStep = fallbackStepBase / stepTrustScale;
         for (let i = 0; i < dim; i++) x[i] = x0Buffer[i] - fallbackStep * gBuffer[i];
         continue;
       }
@@ -786,9 +802,10 @@ export function minimize(
       continue;
     }
 
-    const lr = Math.min(0.35, 8.0 / (gmax + 1e-6));
+    const stepTrustScale = Math.sqrt(1 + stepRegularizerWeight * 500);
+    const lr = Math.min(0.35, 8.0 / ((gmax + 1e-6) * stepTrustScale));
     const momentum = 0.7;
-    const maxStep = 18.0;
+    const maxStep = 18.0 / stepTrustScale;
     for (let i = 0; i < dim; i++) {
       const v = momentum * velocityBuffer[i] - lr * gBuffer[i];
       velocityBuffer[i] = v;
@@ -876,6 +893,8 @@ class PointEl {
     this._cached = g9._warmup(lossFn, [0, 0]);
 
     addDrag(this.el, (_evt) => {
+      // Reset drag-start anchor per gesture so regularization is local to this drag.
+      this._cached.dragStartX = null;
       this._cached.lastConverged = false;
       this._cached.lastHitLimit = false;
       const c0 = this._cachedCoords.slice();
@@ -976,6 +995,8 @@ class LineEl {
     this._cached = g9._warmup(lossFn, [0, 0, 0]);
 
     addDrag(this.el, (evt) => {
+      // Reset drag-start anchor per gesture so regularization is local to this drag.
+      this._cached.dragStartX = null;
       this._cached.lastConverged = false;
       this._cached.lastHitLimit = false;
       const affectsRaw = this.args.affects as AffectsConfig | undefined;
@@ -1428,6 +1449,7 @@ export class G9 {
     const regularizer = {
       anchor: dragStartX,
       weight: effectiveRegWeight,
+      stepWeight: effectiveRegWeight,
     };
     const c = minimize(this.params, this.renderFn, lossFn, target, affectsForGrad, dragIterations, cached, regularizer);
     emitOptimizeLoss(this.containerId, c.lastLoss);

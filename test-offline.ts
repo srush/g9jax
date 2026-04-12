@@ -1165,6 +1165,31 @@ run("drag regularizer limits parameter displacement from drag start", () => {
   );
 });
 
+run("drag regularizer shrinks single-step parameter updates", () => {
+  const runSingleStep = (regWeight: number) => {
+    const host = installFakeDom();
+    const g9 = new G9((params: Record<string, any>) => ({ p: point(params.xy) }), { xy: [0, 0] });
+    g9.align("center", "center").insertInto(host as any);
+    const lossFn = (target: any, coords: any) => {
+      const d = coords.p.sub(target);
+      return d.ref.mul(d).sum();
+    };
+    const affects = { xy: true };
+    const opt = { dragIter: [1], regWeight: [regWeight] };
+    (g9 as any)._minimize("p", lossFn, [280, -230], affects, true, undefined, opt);
+    const after = toList((g9 as any).params[0].value);
+    return Math.hypot(after[0], after[1]);
+  };
+
+  const lowStep = runSingleStep(0);
+  const highStep = runSingleStep(20);
+  assert(Number.isFinite(lowStep) && Number.isFinite(highStep), "single-step regularizer deltas should be finite");
+  assert(
+    highStep < lowStep,
+    `higher drag regularizer should shrink one-step updates, got ${lowStep} vs ${highStep}`,
+  );
+});
+
 run("particles demo keeps params finite under minimization", () => {
   const COUNT = 100;
   const GRID = 10;
