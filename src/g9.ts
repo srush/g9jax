@@ -909,13 +909,13 @@ class PointEl {
       this._cached.lastConverged = false;
       this._cached.lastHitLimit = false;
       const c0 = this._cachedCoords.slice();
-      let shownArrows = false;
+      let computedArrows = false;
       return {
         drag: (dx, dy) => {
           const pullX = c0[0] + dx;
           const pullY = c0[1] + dy;
-          if (!shownArrows) {
-            shownArrows = true;
+          if (!computedArrows) {
+            computedArrows = true;
             this.g9.showGradientArrows(this._cached, [pullX, pullY]);
           }
           this._cached = doMinimize(
@@ -927,6 +927,7 @@ class PointEl {
             this._cached,
             this.args.opt,
           );
+          this.g9.updateGradientArrows();
           const model = this._cachedCoords;
           this.g9.setDragDebug([pullX, pullY], [model[0], model[1]]);
         },
@@ -1034,16 +1035,17 @@ class LineEl {
       let latestPullX = cx;
       let latestPullY = cy;
 
-      let shownArrows = false;
+      let computedArrows = false;
       return {
         drag: (dx, dy) => {
           latestPullX = cx + dx;
           latestPullY = cy + dy;
-          if (!shownArrows) {
-            shownArrows = true;
+          if (!computedArrows) {
+            computedArrows = true;
             this.g9.showGradientArrows(this._cached, [latestPullX, latestPullY, r]);
           }
           this._cached = doMinimize(id, lossFn, [latestPullX, latestPullY, r], affectsRaw, false, this._cached, dragOpt);
+          this.g9.updateGradientArrows();
           const model = this._cachedCoords;
           const targetX = model[0] + (model[2] - model[0]) * r;
           const targetY = model[1] + (model[3] - model[1]) * r;
@@ -1219,6 +1221,8 @@ export class G9 {
   _debugTargetEl: SVGCircleElement | null;
   _dragRenderCounter: number;
   _gradArrowGroup: SVGGElement | null;
+  _gradArrowDeltas: Map<string, [number, number]>;
+  _gradArrowEls: Map<string, { line: SVGLineElement; head: SVGPolygonElement | null }>;
 
   constructor(
     renderFn: RenderFn,
@@ -1246,6 +1250,8 @@ export class G9 {
     this._debugTargetEl = null;
     this._dragRenderCounter = 0;
     this._gradArrowGroup = null;
+    this._gradArrowDeltas = new Map();
+    this._gradArrowEls = new Map();
     liveG9Instances.add(this);
   }
 
@@ -1334,12 +1340,12 @@ export class G9 {
       ? Array.from(perturbedResult.dataSync())
       : toJSArr(perturbedResult);
 
-    const g = document.createElementNS(SVG_NS, "g");
-    g.setAttributeNS(null, "pointer-events", "none");
-
     const ARROW_SCALE = 1.0 / epsilon;
     const MAX_ARROW_LEN = 60;
     const ARROW_HEAD_SIZE = 5;
+
+    const g = document.createElementNS(SVG_NS, "g");
+    g.setAttributeNS(null, "pointer-events", "none");
 
     let off = 0;
     for (const id of cached.renderIds) {
@@ -1358,6 +1364,8 @@ export class G9 {
             dx *= s;
             dy *= s;
           }
+          this._gradArrowDeltas.set(id, [dx, dy]);
+
           const arrowLine = document.createElementNS(SVG_NS, "line");
           setAttrs(arrowLine, {
             x1: cx, y1: cy,
@@ -1369,6 +1377,7 @@ export class G9 {
           g.appendChild(arrowLine);
 
           const arrowMag = Math.sqrt(dx * dx + dy * dy);
+          let headEl: SVGPolygonElement | null = null;
           if (arrowMag > ARROW_HEAD_SIZE * 2) {
             const ux = dx / arrowMag;
             const uy = dy / arrowMag;
@@ -1378,12 +1387,13 @@ export class G9 {
             const baseY = tipY - uy * ARROW_HEAD_SIZE;
             const perpX = -uy * ARROW_HEAD_SIZE * 0.6;
             const perpY = ux * ARROW_HEAD_SIZE * 0.6;
-            const head = document.createElementNS(SVG_NS, "polygon");
-            head.setAttributeNS(null, "points",
+            headEl = document.createElementNS(SVG_NS, "polygon");
+            headEl.setAttributeNS(null, "points",
               `${tipX},${tipY} ${baseX + perpX},${baseY + perpY} ${baseX - perpX},${baseY - perpY}`);
-            head.setAttributeNS(null, "fill", "#e11d48");
-            g.appendChild(head);
+            headEl.setAttributeNS(null, "fill", "#e11d48");
+            g.appendChild(headEl);
           }
+          this._gradArrowEls.set(id, { line: arrowLine, head: headEl });
         }
       }
       off += n;
@@ -1392,11 +1402,45 @@ export class G9 {
     this._gradArrowGroup = g;
   }
 
+  updateGradientArrows(): void {
+    if (!this._gradArrowGroup || this._gradArrowDeltas.size === 0) return;
+    const ARROW_HEAD_SIZE = 5;
+    for (const [id, [dx, dy]] of this._gradArrowDeltas) {
+      const elem = this.elements[id];
+      if (!elem || !(elem instanceof PointEl)) continue;
+      const c = elem._cachedCoords;
+      if (!c) continue;
+      const cx = c[0];
+      const cy = c[1];
+      const els = this._gradArrowEls.get(id);
+      if (!els) continue;
+      setAttrs(els.line, {
+        x1: cx, y1: cy,
+        x2: cx + dx, y2: cy + dy,
+      });
+      if (els.head) {
+        const arrowMag = Math.sqrt(dx * dx + dy * dy);
+        const ux = dx / arrowMag;
+        const uy = dy / arrowMag;
+        const tipX = cx + dx;
+        const tipY = cy + dy;
+        const baseX = tipX - ux * ARROW_HEAD_SIZE;
+        const baseY = tipY - uy * ARROW_HEAD_SIZE;
+        const perpX = -uy * ARROW_HEAD_SIZE * 0.6;
+        const perpY = ux * ARROW_HEAD_SIZE * 0.6;
+        els.head.setAttributeNS(null, "points",
+          `${tipX},${tipY} ${baseX + perpX},${baseY + perpY} ${baseX - perpX},${baseY - perpY}`);
+      }
+    }
+  }
+
   clearGradientArrows(): void {
     if (this._gradArrowGroup) {
       this._gradArrowGroup.remove();
       this._gradArrowGroup = null;
     }
+    this._gradArrowDeltas.clear();
+    this._gradArrowEls.clear();
   }
 
 
