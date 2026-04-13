@@ -982,7 +982,7 @@ return new G9((params) => {
   <!-- Demo: Bar Chart -->
   <div class="demo-section" id="section-bars" style="display:none">
     <h2>Bar Chart</h2>
-    <p class="desc">Drag the orange handle to scale the Y axis; drag the green handle to change bar thickness.</p>
+    <p class="desc">Drag any bar to scale the Y axis; drag the X axis to change bar thickness.</p>
     <div class="demo-card">
       <div class="demo-loss" id="loss-demo-bars">
         <span>Loss</span><span class="loss-value">—</span>
@@ -991,43 +991,44 @@ return new G9((params) => {
       <div class="demo-code" data-target="#demo-bars">
         <textarea>const DATA = [0.3, 0.7, 0.5];
 const COLORS = ["#2563eb", "#8b5cf6", "#ec4899"];
-const SPACING = 50;
 const BASE_Y = 80;
+const AXIS_PAD = 12;
 
 return new G9((params) => {
   const yScale = params.yScale;
   const barW = params.barW;
   const shapes = {};
 
+  const gap = barW.ref.mul(1.6);
   for (let i = 0; i < DATA.length; i++) {
-    const x = np.array([(i - 1) * SPACING], {dtype: np.float32});
-    const h = yScale.ref.mul(DATA[i]);
-    const top = np.array([BASE_Y], {dtype: np.float32}).sub(h.ref);
-    const base = np.array([BASE_Y], {dtype: np.float32});
-
+    const x = gap.ref.mul(i - 1);
+    const top = np.array([BASE_Y], {dtype: np.float32}).sub(yScale.ref.mul(DATA[i]));
+    const bot = np.array([BASE_Y], {dtype: np.float32});
     shapes["bar" + i] = line(
-      np.concatenate([x.ref, top.ref, x.ref, base.ref]),
-      {
-        stroke: COLORS[i],
-        "stroke-width": barW.ref,
-        "stroke-linecap": "butt",
-        affects: {},
-      }
+      np.concatenate([x.ref, top.ref, x.ref, bot.ref]),
+      {stroke: COLORS[i], "stroke-width": barW.ref, "stroke-linecap": "butt",
+       affects: {yScale: true}, opt: {regWeight: [0]}}
     );
   }
 
-  const scaleHandleX = np.array([(DATA.length - 1) * SPACING / 2 + 40], {dtype: np.float32});
-  const scaleHandleY = np.array([BASE_Y], {dtype: np.float32}).sub(yScale.ref);
-  shapes.scaleHandle = point(
-    np.concatenate([scaleHandleX.ref, scaleHandleY.ref]),
-    {fill: "#f97316", r: 7, affects: {yScale: true}, opt: {regWeight: [0]}}
+  const axisX = gap.ref.mul(-1).sub(barW.ref.mul(0.5)).sub(AXIS_PAD);
+  const yTop = np.array([BASE_Y], {dtype: np.float32}).sub(yScale.ref).sub(AXIS_PAD);
+  const yBot = np.array([BASE_Y + AXIS_PAD], {dtype: np.float32});
+  shapes.yAxis = line(
+    np.concatenate([axisX.ref, yTop.ref, axisX.ref, yBot.ref]),
+    {stroke: "#78716c", "stroke-width": 3, "stroke-linecap": "round",
+     affects: {yScale: true}, opt: {regWeight: [0]}}
   );
 
-  const widthHandleX = np.array([0], {dtype: np.float32}).add(barW.ref.mul(0.5));
-  const widthHandleY = np.array([BASE_Y + 20], {dtype: np.float32});
-  shapes.widthHandle = point(
-    np.concatenate([widthHandleX.ref, widthHandleY.ref]),
-    {fill: "#22c55e", r: 7, affects: {barW: true}, opt: {regWeight: [0]}}
+  const xLeft = axisX.ref;
+  const xRight = gap.ref.mul(1).add(barW.ref.mul(0.5)).add(AXIS_PAD);
+  shapes.xAxis = line(
+    np.concatenate([
+      xLeft.ref, np.array([BASE_Y + AXIS_PAD], {dtype: np.float32}),
+      xRight.ref, np.array([BASE_Y + AXIS_PAD], {dtype: np.float32}),
+    ]),
+    {stroke: "#78716c", "stroke-width": 8, "stroke-linecap": "round",
+     affects: {barW: true}, opt: {regWeight: [0]}}
   );
 
   return shapes;
