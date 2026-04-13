@@ -7,6 +7,8 @@ import {
   getG9DragDebugEnabled,
   setG9DragDebugEnabled,
   getG9DebugLossStats,
+  getG9GradientArrowsEnabled,
+  setG9GradientArrowsEnabled,
 } from "./g9";
 import { defaultDevice, init, vmap, type Device } from "@jax-js/jax";
 import { shouldReuseMountedDemo } from "./demo-run-policy";
@@ -166,6 +168,14 @@ function bindDebugControls(): void {
 
   renderDebugStats();
   if (debugToggle?.checked) statsTimer = window.setInterval(renderDebugStats, 200);
+
+  const gradArrowsToggle = document.getElementById("gradient-arrows-toggle") as HTMLInputElement | null;
+  if (gradArrowsToggle) {
+    gradArrowsToggle.checked = getG9GradientArrowsEnabled();
+    gradArrowsToggle.addEventListener("change", () => {
+      setG9GradientArrowsEnabled(gradArrowsToggle.checked);
+    });
+  }
 }
 (window as any).__g9SetDragDebugEnabled = setG9DragDebugEnabled;
 (window as any).__g9GetDragDebugEnabled = getG9DragDebugEnabled;
