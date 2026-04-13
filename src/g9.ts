@@ -1339,7 +1339,7 @@ export class G9 {
 
     const ARROW_SCALE = 1.0 / epsilon;
     const MAX_ARROW_LEN = 60;
-    const ARROW_HEAD_SIZE = 4;
+    const ARROW_HEAD_SIZE = 5;
 
     let off = 0;
     for (const id of cached.renderIds) {
@@ -1363,7 +1363,7 @@ export class G9 {
             x1: cx, y1: cy,
             x2: cx + dx, y2: cy + dy,
             stroke: "#e11d48",
-            "stroke-width": 1.5,
+            "stroke-width": 2,
             "stroke-linecap": "round",
           });
           g.appendChild(arrowLine);
@@ -1398,6 +1398,7 @@ export class G9 {
       this._gradArrowGroup = null;
     }
   }
+
 
   getOffset(): { top: number; left: number } {
     const cachedRect = this._rect || { top: 0, left: 0 };

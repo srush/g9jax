@@ -12,6 +12,8 @@ import {
   getG9LineSearchEnabled,
   setG9LineSearchEnabled,
   getG9DebugLossStats,
+  getG9GradientArrowsEnabled,
+  setG9GradientArrowsEnabled,
 } from "./src/g9";
 import { shouldReuseMountedDemo } from "./src/demo-run-policy";
 
@@ -55,8 +57,10 @@ class FakeElement {
     remove: () => {},
     contains: () => false,
   };
-  appendChild(child: FakeElement): FakeElement { this.children.push(child); return child; }
-  removeChild(child: FakeElement): FakeElement { const i = this.children.indexOf(child); if (i >= 0) this.children.splice(i, 1); return child; }
+  parentElement: FakeElement | null = null;
+  appendChild(child: FakeElement): FakeElement { this.children.push(child); child.parentElement = this; return child; }
+  removeChild(child: FakeElement): FakeElement { const i = this.children.indexOf(child); if (i >= 0) this.children.splice(i, 1); child.parentElement = null; return child; }
+  remove(): void { if (this.parentElement) this.parentElement.removeChild(this); }
   setAttributeNS(_ns: string | null, key: string, value: string): void { this.attrs[key] = value; }
   setAttribute(key: string, value: string): void { this.attrs[key] = value; }
   addEventListener(type: string, handler: (event: any) => void): void {
@@ -1923,6 +1927,85 @@ run("adaptive-step optimizer converges better with 8 iterations than 6", () => {
   assert(err8 < err6, `expected 8 iterations to converge better than 6 (${err8} !< ${err6})`);
   } finally {
     setG9LineSearchEnabled(prev);
+  }
+});
+
+run("gradient arrows appear during drag and clear on release", () => {
+  const prevDebug = getG9DragDebugEnabled();
+  const prevArrows = getG9GradientArrowsEnabled();
+  setG9DragDebugEnabled(true);
+  setG9GradientArrowsEnabled(true);
+  try {
+    const { host, dispatchDocumentEvent } = installInteractiveFakeDom();
+    const g9 = new G9(
+      (params: Record<string, any>) => ({
+        p1: point(params.xy, { affects: { xy: true }, opt: { regWeight: [0] } }),
+        p2: point(
+          np.dot(np.array([[0, 1], [1, 0]], { dtype: np.float32 }).ref, params.xy.ref),
+          { affects: { xy: true }, opt: { regWeight: [0] } },
+        ),
+      }),
+      { xy: [40, 0] },
+    );
+    g9.align("center", "center").insertInto(host as any);
+
+    const pointEl = ((g9 as any).elements.p1 as any).el as FakeElement;
+    const eventAt = (clientX: number, clientY: number) => ({
+      clientX,
+      clientY,
+      cancelable: true,
+      stopPropagation: () => {},
+      preventDefault: () => {},
+    });
+
+    assert(!(g9 as any)._gradArrowGroup, "no arrow group before drag");
+
+    pointEl.dispatch("mousedown", eventAt(440, 300));
+    dispatchDocumentEvent("mousemove", eventAt(490, 300));
+
+    const arrowGroup = (g9 as any)._gradArrowGroup;
+    assert(!!arrowGroup, "expected gradient arrow group to be created during drag");
+    assert(arrowGroup.children.length > 0, "expected at least one arrow element");
+
+    dispatchDocumentEvent("mouseup", eventAt(490, 300));
+    assert(!(g9 as any)._gradArrowGroup, "expected arrow group cleared after release");
+  } finally {
+    setG9DragDebugEnabled(prevDebug);
+    setG9GradientArrowsEnabled(prevArrows);
+  }
+});
+
+run("gradient arrows are not created when toggle is off", () => {
+  const prevDebug = getG9DragDebugEnabled();
+  const prevArrows = getG9GradientArrowsEnabled();
+  setG9DragDebugEnabled(true);
+  setG9GradientArrowsEnabled(false);
+  try {
+    const { host, dispatchDocumentEvent } = installInteractiveFakeDom();
+    const g9 = new G9(
+      (params: Record<string, any>) => ({
+        p1: point(params.xy, { affects: { xy: true }, opt: { regWeight: [0] } }),
+      }),
+      { xy: [40, 0] },
+    );
+    g9.align("center", "center").insertInto(host as any);
+
+    const pointEl = ((g9 as any).elements.p1 as any).el as FakeElement;
+    const eventAt = (clientX: number, clientY: number) => ({
+      clientX,
+      clientY,
+      cancelable: true,
+      stopPropagation: () => {},
+      preventDefault: () => {},
+    });
+
+    pointEl.dispatch("mousedown", eventAt(440, 300));
+    dispatchDocumentEvent("mousemove", eventAt(490, 300));
+    assert(!(g9 as any)._gradArrowGroup, "no arrow group when feature disabled");
+    dispatchDocumentEvent("mouseup", eventAt(490, 300));
+  } finally {
+    setG9DragDebugEnabled(prevDebug);
+    setG9GradientArrowsEnabled(prevArrows);
   }
 });
 
