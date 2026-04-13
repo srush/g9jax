@@ -111,6 +111,7 @@ const DRAG_RENDER_EVERY = 2;
 let activeDragCount = 0;
 let dragDebugEnabled = true;
 let lineSearchEnabled = true;
+let gradientArrowsEnabled = false;
 const liveG9Instances = new Set<G9>();
 const debugLossStats = {
   sum: 0,
@@ -173,6 +174,17 @@ export function setG9LineSearchEnabled(enabled: boolean): void {
 
 export function getG9LineSearchEnabled(): boolean {
   return lineSearchEnabled;
+}
+
+export function setG9GradientArrowsEnabled(enabled: boolean): void {
+  gradientArrowsEnabled = enabled;
+  if (!enabled) {
+    for (const g9 of liveG9Instances) g9.clearGradientArrows();
+  }
+}
+
+export function getG9GradientArrowsEnabled(): boolean {
+  return gradientArrowsEnabled;
 }
 
 export function getG9DebugLossStats(): { average: number; count: number; last: number } {
@@ -893,7 +905,6 @@ class PointEl {
     this._cached = g9._warmup(lossFn, [0, 0]);
 
     addDrag(this.el, (_evt) => {
-      // Reset drag-start anchor per gesture so regularization is local to this drag.
       this._cached.dragStartX = null;
       this._cached.lastConverged = false;
       this._cached.lastHitLimit = false;
@@ -911,6 +922,7 @@ class PointEl {
             this._cached,
             this.args.opt,
           );
+          this.g9.showGradientArrows(this._cached, [pullX, pullY]);
           const model = this._cachedCoords;
           this.g9.setDragDebug([pullX, pullY], [model[0], model[1]]);
         },
@@ -926,6 +938,7 @@ class PointEl {
             this.args.opt,
           );
           this.g9.clearDragDebug();
+          this.g9.clearGradientArrows();
         },
       };
     });
@@ -1022,6 +1035,7 @@ class LineEl {
           latestPullX = cx + dx;
           latestPullY = cy + dy;
           this._cached = doMinimize(id, lossFn, [latestPullX, latestPullY, r], affectsRaw, false, this._cached, dragOpt);
+          this.g9.showGradientArrows(this._cached, [latestPullX, latestPullY, r]);
           const model = this._cachedCoords;
           const targetX = model[0] + (model[2] - model[0]) * r;
           const targetY = model[1] + (model[3] - model[1]) * r;
@@ -1034,6 +1048,7 @@ class LineEl {
           const rr = ll2 > 0 ? ((latestPullX - c[0]) * ldx + (latestPullY - c[1]) * ldy) / ll2 : r;
           this._cached = doMinimize(id, lossFn, [latestPullX, latestPullY, rr], affectsRaw, true, this._cached, dragOpt);
           this.g9.clearDragDebug();
+          this.g9.clearGradientArrows();
         },
       };
     });
@@ -1195,6 +1210,7 @@ export class G9 {
   _debugPullEl: SVGCircleElement | null;
   _debugTargetEl: SVGCircleElement | null;
   _dragRenderCounter: number;
+  _gradArrowGroup: SVGGElement | null;
 
   constructor(
     renderFn: RenderFn,
@@ -1221,6 +1237,7 @@ export class G9 {
     this._debugPullEl = null;
     this._debugTargetEl = null;
     this._dragRenderCounter = 0;
+    this._gradArrowGroup = null;
     liveG9Instances.add(this);
   }
 
@@ -1274,6 +1291,109 @@ export class G9 {
     this._debugPullEl.style.display = "none";
     this._debugTargetEl.style.display = "none";
   }
+
+  showGradientArrows(
+    cached: CachedJit,
+    target: number[],
+  ): void {
+    if (!gradientArrowsEnabled) return;
+    const tLen = target.length;
+    const dim = cached.lastX.length;
+    if (dim === 0) return;
+    const totalLen = tLen + dim;
+    const buf = new Float32Array(totalLen);
+    for (let i = 0; i < tLen; i++) buf[i] = target[i];
+    for (let i = 0; i < dim; i++) buf[tLen + i] = cached.lastX[i];
+    const fullG = toJSArr(cached.jitGrad(np.array(buf, { dtype: np.float32 })));
+
+    const paramGrad = new Float64Array(dim);
+    for (let i = 0; i < dim; i++) {
+      const raw = fullG[tLen + i];
+      paramGrad[i] = cached.affectsMask ? raw * cached.affectsMask[i] : raw;
+    }
+
+    const renderResult = cached.jitRender(np.array(cached.lastX, { dtype: np.float32 }));
+    const allCoords: number[] = typeof renderResult?.dataSync === "function"
+      ? Array.from(renderResult.dataSync())
+      : toJSArr(renderResult);
+
+    const epsilon = 0.01;
+    const perturbedX = new Float32Array(dim);
+    for (let i = 0; i < dim; i++) perturbedX[i] = cached.lastX[i] - epsilon * paramGrad[i];
+    const perturbedResult = cached.jitRender(np.array(perturbedX, { dtype: np.float32 }));
+    const perturbedCoords: number[] = typeof perturbedResult?.dataSync === "function"
+      ? Array.from(perturbedResult.dataSync())
+      : toJSArr(perturbedResult);
+
+    const ARROW_SCALE = 1.0 / epsilon;
+    const MAX_ARROW_LEN = 60;
+    const ARROW_HEAD_SIZE = 5;
+
+    let g = this._gradArrowGroup;
+    if (!g) {
+      g = document.createElementNS(SVG_NS, "g");
+      g.setAttributeNS(null, "pointer-events", "none");
+      this.node.appendChild(g);
+      this._gradArrowGroup = g;
+    }
+    g.textContent = "";
+
+    let off = 0;
+    for (const id of cached.renderIds) {
+      const elem = this.elements[id];
+      if (!elem) continue;
+      const n = elem instanceof LineEl ? 4 : 2;
+      if (elem instanceof PointEl) {
+        const cx = allCoords[off];
+        const cy = allCoords[off + 1];
+        let dx = (perturbedCoords[off] - cx) * ARROW_SCALE;
+        let dy = (perturbedCoords[off + 1] - cy) * ARROW_SCALE;
+        const mag = Math.sqrt(dx * dx + dy * dy);
+        if (mag > 0.5) {
+          if (mag > MAX_ARROW_LEN) {
+            const s = MAX_ARROW_LEN / mag;
+            dx *= s;
+            dy *= s;
+          }
+          const arrowLine = document.createElementNS(SVG_NS, "line");
+          setAttrs(arrowLine, {
+            x1: cx, y1: cy,
+            x2: cx + dx, y2: cy + dy,
+            stroke: "#e11d48",
+            "stroke-width": 2,
+            "stroke-linecap": "round",
+          });
+          g.appendChild(arrowLine);
+
+          const arrowMag = Math.sqrt(dx * dx + dy * dy);
+          if (arrowMag > ARROW_HEAD_SIZE * 2) {
+            const ux = dx / arrowMag;
+            const uy = dy / arrowMag;
+            const tipX = cx + dx;
+            const tipY = cy + dy;
+            const baseX = tipX - ux * ARROW_HEAD_SIZE;
+            const baseY = tipY - uy * ARROW_HEAD_SIZE;
+            const perpX = -uy * ARROW_HEAD_SIZE * 0.6;
+            const perpY = ux * ARROW_HEAD_SIZE * 0.6;
+            const head = document.createElementNS(SVG_NS, "polygon");
+            head.setAttributeNS(null, "points",
+              `${tipX},${tipY} ${baseX + perpX},${baseY + perpY} ${baseX - perpX},${baseY - perpY}`);
+            head.setAttributeNS(null, "fill", "#e11d48");
+            g.appendChild(head);
+          }
+        }
+      }
+      off += n;
+    }
+  }
+
+  clearGradientArrows(): void {
+    if (this._gradArrowGroup) {
+      this._gradArrowGroup.remove();
+      this._gradArrowGroup = null;
+    }
+  }
+
 
   getOffset(): { top: number; left: number } {
     const cachedRect = this._rect || { top: 0, left: 0 };
