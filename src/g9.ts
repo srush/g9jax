@@ -1054,7 +1054,7 @@ class LineEl {
     this.args = args;
     const a: Record<string, any> = {};
     if (args.stroke) a.stroke = args.stroke;
-    if (args["stroke-width"]) a["stroke-width"] = args["stroke-width"];
+    if (args["stroke-width"] != null) a["stroke-width"] = toJS(args["stroke-width"]);
     if (args["stroke-linecap"]) a["stroke-linecap"] = args["stroke-linecap"];
     setAttrs(this.el, a);
   }
@@ -1191,6 +1191,7 @@ export class G9 {
   yAlign: string;
   xOff: number;
   yOff: number;
+  dynamicMeta: boolean;
   _rect: DOMRect | null;
   _debugPullEl: SVGCircleElement | null;
   _debugTargetEl: SVGCircleElement | null;
@@ -1199,6 +1200,7 @@ export class G9 {
   constructor(
     renderFn: RenderFn,
     initialParams: Record<string, number | number[]>,
+    opts?: { dynamicMeta?: boolean },
   ) {
     this.renderFn = renderFn;
     this.params = [];
@@ -1217,6 +1219,7 @@ export class G9 {
     this.yAlign = "center";
     this.xOff = 0;
     this.yOff = 0;
+    this.dynamicMeta = opts?.dynamicMeta ?? false;
     this._rect = null;
     this._debugPullEl = null;
     this._debugTargetEl = null;
@@ -1492,6 +1495,18 @@ export class G9 {
       const n = elem instanceof LineEl ? 4 : 2;
       elem.updateCoords(allCoords.slice(off, off + n));
       off += n;
+    }
+    if (this.dynamicMeta) this._refreshMeta();
+  }
+
+  _refreshMeta(): void {
+    const obj: Record<string, any> = {};
+    for (const p of this.params) obj[p.name] = p.value.ref;
+    const { shapes: renderables } = parseRenderOutput(this.renderFn(obj));
+    if (!renderables) return;
+    for (const [id, shape] of Object.entries(renderables)) {
+      const elem = this.elements[id];
+      if (elem) elem.updateMeta(shape);
     }
   }
 

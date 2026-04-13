@@ -326,6 +326,7 @@ async function main() {
     ["section-dragon", "#demo-dragon"],
     ["section-tree", "#demo-tree"],
     ["section-snake", "#demo-snake"],
+    ["section-bars", "#demo-bars"],
   ].map(([sectionId, canvasSelector]) => ({ sectionId, canvasSelector }));
 
   // Unhide sections first for layout consistency.

@@ -979,6 +979,79 @@ return new G9((params) => {
     </div>
   </div>
 
+  <!-- Demo: Bar Chart -->
+  <div class="demo-section" id="section-bars" style="display:none">
+    <h2>Bar Chart</h2>
+    <p class="desc">Drag the Y axis to change the scale (y-limit); drag the X axis to change bar thickness.</p>
+    <div class="demo-card">
+      <div class="demo-loss" id="loss-demo-bars">
+        <span>Loss</span><span class="loss-value">—</span>
+      </div>
+      <div class="demo-canvas" id="demo-bars"></div>
+      <div class="demo-code" data-target="#demo-bars">
+        <textarea>const DATA = [0.3, 0.7, 0.5];
+const COLORS = ["#2563eb", "#8b5cf6", "#ec4899"];
+const BASE_Y = 80;
+const PPU = 160;
+const PAD = 12;
+const TICKS = 4;
+const TICK_LEN = 6;
+
+return new G9((params) => {
+  const yLim = params.yLim;
+  const barW = params.barW;
+  const shapes = {};
+
+  const gap = barW.ref.mul(1.6);
+  for (let i = 0; i < DATA.length; i++) {
+    const x = gap.ref.mul(i - 1);
+    const top = np.array([BASE_Y - DATA[i] * PPU], {dtype: np.float32});
+    const bot = np.array([BASE_Y], {dtype: np.float32});
+    shapes["bar" + i] = line(
+      np.concatenate([x.ref, top.ref, x.ref, bot.ref]),
+      {stroke: COLORS[i], "stroke-width": barW.ref, "stroke-linecap": "butt",
+       affects: {}}
+    );
+  }
+
+  const axX = gap.ref.mul(-1).sub(barW.ref.mul(0.5)).sub(PAD);
+  const axTop = np.array([BASE_Y], {dtype: np.float32}).sub(yLim.ref.mul(PPU));
+  const axBot = np.array([BASE_Y], {dtype: np.float32});
+  shapes.yAxis = line(
+    np.concatenate([axX.ref, axTop.ref, axX.ref, axBot.ref]),
+    {stroke: "#78716c", "stroke-width": 3, "stroke-linecap": "round",
+     affects: {yLim: true}, opt: {regWeight: [0]}}
+  );
+
+  for (let t = 0; t <= TICKS; t++) {
+    const frac = t / TICKS;
+    const ty = np.array([BASE_Y], {dtype: np.float32}).sub(yLim.ref.mul(frac * PPU));
+    shapes["tk" + t] = line(
+      np.concatenate([axX.ref.sub(TICK_LEN), ty.ref, axX.ref, ty.ref]),
+      {stroke: "#78716c", "stroke-width": 2, "stroke-linecap": "round",
+       affects: {yLim: true}, opt: {regWeight: [0]}}
+    );
+  }
+
+  const xLeft = axX.ref;
+  const xRight = gap.ref.mul(1).add(barW.ref.mul(0.5)).add(PAD);
+  shapes.xAxis = line(
+    np.concatenate([
+      xLeft.ref, np.array([BASE_Y], {dtype: np.float32}),
+      xRight.ref, np.array([BASE_Y], {dtype: np.float32}),
+    ]),
+    {stroke: "#78716c", "stroke-width": 8, "stroke-linecap": "round",
+     affects: {barW: true}, opt: {regWeight: [0]}}
+  );
+
+  return shapes;
+}, {yLim: [1], barW: [30]}, {dynamicMeta: true});</textarea>
+        <button class="run-btn">Run ▶</button>
+        <div class="error-msg"></div>
+      </div>
+    </div>
+  </div>
+
 </div>
 
 <footer>
